@@ -1,0 +1,143 @@
+{
+    "files.autoSave": "afterDelay",
+    "files.autoSaveDelay": 100,
+    "editor.multiCursorModifier": "alt",
+    "git.autofetch": true,
+    "diffEditor.ignoreTrimWhitespace": false,
+    "[python]": {
+        "editor.formatOnType": true,
+        "editor.defaultFormatter": "ms-python.black-formatter",
+        "editor.formatOnSave": false,
+        "diffEditor.ignoreTrimWhitespace": false,
+        "editor.wordWrap": "wordWrapColumn"
+    },
+    "isort.args": [
+        "--profile",
+        "black"
+    ],
+    "notebook.output.wordWrap": true,
+    "jupyter.askForKernelRestart": false,
+    "editor.minimap.enabled": false,
+    "editor.wordWrap": "wordWrapColumn",
+    "files.trimTrailingWhitespace": false,
+    "editor.formatOnSaveMode": "file",
+    "editor.formatOnSave": false,
+    "jupyter.runStartupCommands": [
+        "%load_ext autoreload",
+        "%autoreload 2"
+    ],
+    "notebook.output.textLineLimit": 3000,
+    "jupyter.interactiveWindow.creationMode": "perFile",
+    "notebook.formatOnSave.enabled": true,
+    "launch": {
+        "version": "0.2.0",
+        "configurations": [
+            {
+                "name": "Python: Remote Attach",
+                "type": "debugpy",
+                "request": "attach",
+                "connect": {
+                    "port": 5678,
+                    "host": "localhost"
+                },
+                "justMyCode": false,
+                "subProcess": true
+            }
+        ]
+    },
+    "mypy.runUsingActiveInterpreter": true,
+    "jupyter.notebookFileRoot": "${workspaceFolder}",
+    "typescript.preferences.includePackageJsonAutoImports": "on",
+    "python.analysis.autoImportCompletions": true,
+    "editor.accessibilitySupport": "off",
+    "remote.SSH.enableRemoteCommand": true,
+    "files.exclude": {
+        "**/.cache": true,
+        "**/.DS_Store": true,
+        "**/.git": true,
+        "**/.venv": true
+    },
+    "files.watcherExclude": {
+        "**/.venv/**": true,
+        "**/prompt_history/**": true,
+        "**/.git/objects/**": true,
+        "**/.git/subtree-cache/**": true
+    },
+    "search.exclude": {
+        "**/.cache": true,
+        "**/.venv": true
+    },
+    "search.useGlobalIgnoreFiles": false,
+    "jupyter.widgetScriptSources": [
+        "jsdelivr.com",
+        "unpkg.com"
+    ],
+    "cursor.cpp.disabledLanguages": [
+        "plaintext",
+        "untitled"
+    ],
+    "explorer.confirmDragAndDrop": false,
+    "workbench.iconTheme": "vscode-icons",
+    "files.associations": {
+        "*.strings": "plist",
+        "*.plist": "plist"
+    },
+    "editor.fontFamily": "Menlo, Monaco, 'Fira Code', monospace",
+    "window.zoomLevel": 1,
+    "remote.SSH.maxReconnectionAttempts": 0,
+    "explorer.confirmDelete": false,
+    "workbench.colorTheme": "One Dark Pro",
+    "vsicons.dontShowNewVersionMessage": true,
+    "vsicons.associations.folders": [
+        { "icon": "test", "extensions": ["experiments"], "format": "svg" },
+        { "icon": "log", "extensions": ["journal"], "format": "svg" },
+        { "icon": "blueprint", "extensions": ["plans"], "format": "svg" },
+        { "icon": "todo", "extensions": ["tasks"], "format": "svg" },
+        { "icon": "config", "extensions": ["rules"], "format": "svg" },
+        { "icon": "plugin", "extensions": ["skills"], "format": "svg" },
+        { "icon": "bot", "extensions": ["agents"], "format": "svg" },
+        { "icon": "claude",  "extensions": ["claude"],   "format": "svg" },
+        { "icon": "gemini",  "extensions": ["gemini"],   "format": "svg" },
+        { "icon": "bot",     "extensions": ["codex"],    "format": "svg" },
+        { "icon": "python",  "extensions": ["plotting"], "format": "svg" }
+    ],
+    "python.analysis.packageIndexDepths": [
+        {
+            "name": "sklearn",
+            "depth": 2
+        },
+        {
+            "name": "matplotlib",
+            "depth": 2
+        },
+        {
+            "name": "scipy",
+            "depth": 2
+        },
+        {
+            "name": "django",
+            "depth": 2
+        },
+        {
+            "name": "flask",
+            "depth": 2
+        },
+        {
+            "name": "fastapi",
+            "depth": 2
+        },
+        {
+            "name": "inspect_ai",
+            "depth": 2
+        }
+    ],
+    "cursor.cpp.enablePartialAccepts": true,
+    "diffEditor.hideUnchangedRegions.enabled": true,
+    "git.openRepositoryInParentFolders": "never",
+    "[markdown]": {
+    },
+    "editor.wrappingIndent": "indent",
+    "workbench.activityBar.orientation": "vertical",
+    "workbench.sideBar.location": "left",
+    "python.languageServer": "None"
+}

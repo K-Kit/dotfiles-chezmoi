@@ -1,0 +1,16 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "share": "disabled",
+  "mcp": {
+    "agentation": {
+      "type": "local",
+      "command": [
+        "npx",
+        "-y",
+        "agentation-mcp",
+        "server"
+      ],
+      "enabled": false
+    }
+  }
+}

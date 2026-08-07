@@ -1,0 +1,216 @@
+#cloud-config
+# Cloud-init user-data mirroring scripts/cloud/create-user.sh + setup.sh
+# for generic VMs (Hetzner, DigitalOcean, AWS, Azure, Multipass, etc.).
+#
+# Usage:
+#   # Paste as user-data when creating the instance, or:
+#   multipass launch --cloud-init scripts/cloud/cloud-init.yaml
+#   # Hetzner / DO / AWS: paste YAML into the cloud-init / user-data field
+#
+# Optional secrets (inject before launch, or merge a second #cloud-config):
+#   write_files:
+#     - path: /etc/dotfiles-bootstrap.env
+#       permissions: "0600"
+#       content: |
+#         BWS_TOKEN=...
+#         TAILSCALE_AUTH_KEY=tskey-...
+#
+# Override identity by editing the vars in write_files below, or by merging:
+#   write_files:
+#     - path: /etc/dotfiles-bootstrap.env
+#       content: |
+#         USERNAME=dev
+#         GITHUB_USER=mygh
+#         DOTFILES_REPO=https://github.com/me/dotfiles.git
+#         DOTFILES_BRANCH=main
+
+package_update: true
+package_upgrade: false
+
+packages:
+  - sudo
+  - zsh
+  - vim
+  - tmux
+  - openssh-server
+  - mosh
+  - rsync
+  - curl
+  - ca-certificates
+  - unzip
+  - locales
+  - git
+
+locale: en_US.UTF-8
+timezone: Etc/UTC
+
+# Identity defaults for this fork — override via /etc/dotfiles-bootstrap.env
+write_files:
+  - path: /etc/dotfiles-bootstrap.env
+    permissions: "0600"
+    owner: root:root
+    content: |
+      USERNAME=kit
+      GITHUB_USER=K-Kit
+      DOTFILES_REPO=https://github.com/K-Kit/dotfiles-chezmoi.git
+      DOTFILES_BRANCH=main
+      # BWS_TOKEN=
+      # TAILSCALE_AUTH_KEY=
+
+  - path: /usr/local/sbin/dotfiles-cloud-bootstrap
+    permissions: "0755"
+    owner: root:root
+    content: |
+      #!/bin/bash
+      # Idempotent first-boot bootstrap (create-user + setup equivalents).
+      set -euo pipefail
+
+      log()  { echo "  $*"; }
+      ok()   { echo "  ✓ $*"; }
+      warn() { echo "  ⚠ $*" >&2; }
+      fail() { echo "  ✗ $*" >&2; exit 1; }
+      step() { echo ""; echo "── $* ──"; }
+
+      # shellcheck disable=SC1091
+      [[ -f /etc/dotfiles-bootstrap.env ]] && . /etc/dotfiles-bootstrap.env
+
+      USERNAME="${USERNAME:-kit}"
+      GITHUB_USER="${GITHUB_USER:-K-Kit}"
+      DOTFILES_REPO="${DOTFILES_REPO:-https://github.com/K-Kit/dotfiles-chezmoi.git}"
+      DOTFILES_BRANCH="${DOTFILES_BRANCH:-main}"
+      USER_HOME="/home/${USERNAME}"
+      MARKER="/var/lib/dotfiles-cloud-bootstrap.done"
+
+      [[ "$(id -u)" -eq 0 ]] || fail "Must run as root"
+
+      if [[ -f "$MARKER" ]]; then
+        log "Already bootstrapped ($MARKER) — skipping"
+        exit 0
+      fi
+
+      echo "=== Cloud-init bootstrap ==="
+      log "User:   $USERNAME"
+      log "Repo:   $DOTFILES_REPO @ $DOTFILES_BRANCH"
+
+      # ── User (create-user.sh) ───────────────────────────────────────────────
+      step "User account"
+      if ! id "$USERNAME" &>/dev/null; then
+        useradd -m -d "$USER_HOME" -s /usr/bin/zsh "$USERNAME"
+        ok "Created $USERNAME"
+      else
+        usermod -s /usr/bin/zsh "$USERNAME" 2>/dev/null || true
+        ok "User $USERNAME already exists"
+      fi
+      echo "$USERNAME ALL=(ALL) NOPASSWD:ALL" > "/etc/sudoers.d/$USERNAME"
+      chmod 440 "/etc/sudoers.d/$USERNAME"
+      mkdir -p "$USER_HOME"
+      chown "$USERNAME:$USERNAME" "$USER_HOME"
+      chmod 755 "$USER_HOME"
+
+      # ── sshd ───────────────────────────────────────────────────────────────
+      step "sshd"
+      SSHD_CONFIG="/etc/ssh/sshd_config"
+      ls /etc/ssh/ssh_host_*_key &>/dev/null || ssh-keygen -A
+      if grep -q '^PubkeyAuthentication no' "$SSHD_CONFIG" 2>/dev/null; then
+        sed -i 's/^PubkeyAuthentication no/PubkeyAuthentication yes/' "$SSHD_CONFIG"
+      elif ! grep -q '^PubkeyAuthentication' "$SSHD_CONFIG" 2>/dev/null; then
+        echo 'PubkeyAuthentication yes' >> "$SSHD_CONFIG"
+      fi
+      systemctl restart ssh 2>/dev/null || systemctl restart sshd 2>/dev/null || service ssh restart 2>/dev/null || true
+      ok "sshd configured"
+
+      # ── SSH authorized_keys (GitHub + any existing) ─────────────────────────
+      step "SSH keys"
+      SSH_DIR="$USER_HOME/.ssh"
+      mkdir -p "$SSH_DIR"
+      EXISTING=""
+      [[ -f "$SSH_DIR/authorized_keys" ]] && EXISTING=$(cat "$SSH_DIR/authorized_keys")
+      [[ -f /root/.ssh/authorized_keys ]] && EXISTING=$(printf '%s\n%s' "$EXISTING" "$(cat /root/.ssh/authorized_keys)")
+      GH_KEYS=$(curl -fsSL "https://github.com/${GITHUB_USER}.keys" 2>/dev/null) || warn "Could not fetch GitHub keys for $GITHUB_USER"
+      ALL=$(printf '%s\n%s' "$EXISTING" "$GH_KEYS" | grep -v '^$' | sort -u || true)
+      if [[ -n "$ALL" ]]; then
+        printf '%s\n' "$ALL" > "$SSH_DIR/authorized_keys"
+        ok "$(printf '%s\n' "$ALL" | wc -l | tr -d ' ') key(s) installed"
+      else
+        warn "No authorized_keys installed — you may be locked out without console access"
+      fi
+      chmod 700 "$SSH_DIR"
+      [[ -f "$SSH_DIR/authorized_keys" ]] && chmod 600 "$SSH_DIR/authorized_keys"
+      chown -R "$USERNAME:$USERNAME" "$SSH_DIR"
+
+      if [[ ! -f "$SSH_DIR/id_ed25519" ]]; then
+        sudo -u "$USERNAME" ssh-keygen -t ed25519 -N '' -C "$USERNAME@$(hostname)" -f "$SSH_DIR/id_ed25519" -q
+        ok "Outbound SSH key: $SSH_DIR/id_ed25519.pub"
+      fi
+
+      # ── Locale (setup.sh soft) ──────────────────────────────────────────────
+      step "Locale"
+      locale-gen en_US.UTF-8 en_GB.UTF-8 2>/dev/null || true
+      update-locale LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8 2>/dev/null || true
+
+      # ── Tooling via setup.sh (soft: uv, chezmoi, gh, claude, tailscale, fnox) ─
+      step "setup.sh"
+      export USERNAME GITHUB_USER DOTFILES_REPO
+      export BWS_TOKEN="${BWS_TOKEN:-}"
+      export TAILSCALE_AUTH_KEY="${TAILSCALE_AUTH_KEY:-}"
+      SETUP_URL="${SETUP_URL:-https://raw.githubusercontent.com/K-Kit/dotfiles-chezmoi/main/scripts/cloud/setup.sh}"
+      if curl -fsSL "$SETUP_URL" | bash -s -- "$DOTFILES_BRANCH"; then
+        ok "setup.sh finished"
+      else
+        warn "setup.sh failed — check /var/log/cloud-init-output.log"
+      fi
+
+      # ── Soft: fnox (also in setup.sh; keeps older setup.sh on main covered) ──
+      step "fnox"
+      if sudo -u "$USERNAME" -i bash -c 'command -v fnox' &>/dev/null; then
+        ok "fnox already present"
+      else
+        if ! sudo -u "$USERNAME" -i bash -c 'command -v mise' &>/dev/null; then
+          sudo -u "$USERNAME" -i bash -c 'curl -fsSL https://mise.run | sh' \
+            || warn "mise install failed"
+        fi
+        if sudo -u "$USERNAME" -i bash -c '
+             export PATH="$HOME/.local/bin:$PATH"
+             eval "$(mise activate bash 2>/dev/null)" || true
+             mise use -g github:jdx/fnox
+             command -v fnox
+           ' &>/dev/null; then
+          ok "fnox installed"
+        else
+          warn "fnox install failed — continuing"
+        fi
+      fi
+
+      date -u +"%Y-%m-%dT%H:%M:%SZ" > "$MARKER"
+      echo ""
+      echo "=== Bootstrap complete ==="
+      log "SSH:  ssh ${USERNAME}@<ip>"
+      log "Next: su - ${USERNAME}  →  gh auth login  →  sync-gist"
+
+# Prefer GitHub SSH keys via ssh_import_id when the distro supports it;
+# the bootstrap script also pulls https://github.com/<user>.keys as a fallback.
+# shell is bash here because packages (zsh) install after users on most images;
+# bootstrap chsh's to zsh once it exists.
+users:
+  - name: kit
+    primary_group: kit
+    groups: [sudo]
+    shell: /bin/bash
+    lock_passwd: true
+    sudo: ["ALL=(ALL) NOPASSWD:ALL"]
+    ssh_authorized_keys:
+      - |
+        ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBKOXV52ck5g1ekkcBk4fNB9jHA7Tkafzj12V5DrcAck kit@MacBook-Pro.lan
+    ssh_import_id:
+      - gh:K-Kit
+      
+
+ssh_pwauth: false
+disable_root: true
+
+runcmd:
+  - [bash, /usr/local/sbin/dotfiles-cloud-bootstrap]
+
+final_message: |
+  Dotfiles cloud-init finished. Login: ssh kit@<ip>
+  Logs: /var/log/cloud-init-output.log

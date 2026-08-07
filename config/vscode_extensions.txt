@@ -1,0 +1,67 @@
+# VSCode/Cursor/Antigravity Extensions
+# Deployed by: ./deploy.sh --editor
+# Curated from 67 installed → 38 tracked. One extension ID per line.
+
+# === Core Python ===
+ms-python.python
+ms-python.debugpy
+charliermarsh.ruff
+astral-sh.ty
+
+# === Jupyter + Data ===
+ms-toolsai.jupyter
+ms-toolsai.jupyter-keymap
+ms-toolsai.jupyter-renderers
+ms-toolsai.datawrangler
+
+# === Rust ===
+rust-lang.rust-analyzer
+vadimcn.vscode-lldb
+serayuzgur.crates
+
+# === TypeScript / Web ===
+esbenp.prettier-vscode
+astro-build.astro-vscode
+mattpocock.ts-error-translator
+ms-vscode.live-server
+
+# === Remote Development ===
+ms-vscode-remote.remote-ssh
+ms-vscode-remote.remote-ssh-edit
+ms-vscode.remote-explorer
+
+# === Git ===
+eamodio.gitlens
+
+# === Data & Config Formats ===
+mechatroner.rainbow-csv
+lehoanganh298.json-lines-viewer
+richie5um2.vscode-sort-json
+redhat.vscode-yaml
+tamasfe.even-better-toml
+dotjoshjohnson.xml
+dnicolson.binary-plist
+
+# === Writing / Markdown ===
+james-yu.latex-workshop
+ltex-plus.vscode-ltex-plus
+mermaidchart.vscode-mermaid-chart
+yzhang.markdown-all-in-one
+davidanson.vscode-markdownlint
+
+# === AI / Research ===
+ukaisi.inspect-ai
+rsip-vision.nvidia-smi-plus
+
+# === Productivity ===
+usernamehw.errorlens
+Gruntfuggly.todo-tree
+aaron-bond.better-comments
+johnpapa.vscode-peacock
+oderwat.indent-rainbow
+alefragnani.project-manager
+
+# === Utilities ===
+wakatime.vscode-wakatime
+tomoki1207.pdf
+vscode-icons-team.vscode-icons

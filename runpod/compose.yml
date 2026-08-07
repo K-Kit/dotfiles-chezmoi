@@ -1,0 +1,34 @@
+name: dotfiles-space
+
+x-space: &space
+  build:
+    context: ..
+    dockerfile: runpod/space.Dockerfile
+  image: dotfiles-space:local
+  stdin_open: true
+  tty: true
+  working_dir: /workspace
+  volumes:
+    - ${SPACE_WORKSPACE:-..}:/workspace
+
+services:
+  workspace:
+    <<: *space
+    environment:
+      SPACE_DOCKER_MODE: socket
+    volumes:
+      - ${SPACE_WORKSPACE:-..}:/workspace
+      - /var/run/docker.sock:/var/run/docker.sock
+
+  dind:
+    <<: *space
+    profiles: [dind]
+    privileged: true
+    environment:
+      SPACE_DOCKER_MODE: dind
+    volumes:
+      - ${SPACE_WORKSPACE:-..}:/workspace
+      - docker-data:/var/lib/docker
+
+volumes:
+  docker-data:

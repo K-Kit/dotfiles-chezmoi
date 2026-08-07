@@ -1,0 +1,13 @@
+.git
+.agent-claims
+.DS_Store
+node_modules
+plans
+tmp
+claude/diagnostics
+claude/history.jsonl
+claude/logs
+claude/state
+claude/tasks
+codex/.tmp
+codex/sessions
