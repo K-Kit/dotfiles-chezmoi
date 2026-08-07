@@ -62,6 +62,5 @@ oderwat.indent-rainbow
 alefragnani.project-manager
 
 # === Utilities ===
-wakatime.vscode-wakatime
 tomoki1207.pdf
 vscode-icons-team.vscode-icons
