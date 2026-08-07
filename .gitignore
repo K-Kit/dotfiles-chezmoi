@@ -22,3 +22,4 @@
 
 # Multi-agent coordination claim files (per-session, ephemeral)
 .agent-claims/
+.env
