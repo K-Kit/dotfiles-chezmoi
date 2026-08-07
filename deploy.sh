@@ -78,7 +78,7 @@ COMPONENTS:
     --git-hooks       Deploy global git hooks
     --pkg-configs     Deploy package manager security configs (7-day quarantine)
     --secrets         Sync secrets with GitHub gist
-    --secrets-env     Verify BWS secrets are configured
+    --secrets-env     Verify secrets backend is configured (file/fnox/bws)
     --dep-audit       Install weekly dependency audit (supply chain defense)
     --cleanup         Install file cleanup: Downloads/Screenshots (macOS only)
     --claude-cleanup  Install Claude Code session cleanup (both platforms)
@@ -308,21 +308,39 @@ if [[ "$DEPLOY_SECRETS" == "true" ]]; then
     "$DOT_DIR/scripts/cleanup/setup_gist_sync.sh" || log_warning "Failed to setup automated gist sync"
 fi
 
-# ─── Secrets (BWS) ───────────────────────────────────────────────────────────
+# ─── Secrets (file / fnox / BWS) ─────────────────────────────────────────────
 
 if [[ "${DEPLOY_SECRETS_ENV:-false}" == "true" ]]; then
-    log_section "SECRETS (BWS)"
+    log_section "SECRETS"
 
+    local secrets_backend
+    secrets_backend="$(dotfiles_secrets_backend)"
+    case "$secrets_backend" in
+        bws)
+            log_success "Secrets backend: bws ($(dotfiles_secrets_bws_token_file))"
+            ;;
+        file)
+            log_success "Secrets backend: file ($(dotfiles_secrets_enc_file))"
+            ;;
+        fnox)
+            log_success "Secrets backend: fnox ($(dotfiles_secrets_fnox_config))"
+            ;;
+        none)
+            log_info "No secrets backend configured — run one of:"
+            log_info "  secrets-init file   # local age-encrypted secrets.env.enc (no Bitwarden)"
+            log_info "  secrets-init fnox   # project fnox.toml + age (no Bitwarden)"
+            log_info "  secrets-init bws    # Bitwarden Secrets Manager"
+            ;;
+        *)
+            log_warning "Unknown secrets backend: $secrets_backend"
+            ;;
+    esac
+
+    if ! cmd_exists age; then
+        log_warning "age not installed — needed for file/fnox backends (./install.sh)"
+    fi
     if ! cmd_exists bws; then
-        log_warning "bws not installed — run install.sh"
-    else
-        local bws_token_file
-        bws_token_file="$(dotfiles_secrets_bws_token_file)"
-        if [[ -f "$bws_token_file" ]]; then
-            log_success "BWS token found at $bws_token_file"
-        else
-            log_info "No BWS token at $bws_token_file — run: secrets-init bws"
-        fi
+        log_info "bws not installed (optional; only needed for Bitwarden backend)"
     fi
 
     dotfiles_secrets_harden_permissions

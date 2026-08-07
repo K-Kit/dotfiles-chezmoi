@@ -114,7 +114,7 @@ For cloud environments (RunPod, Hetzner, Lambda Labs, etc):
   - [pdb++](#pdb-python-debugger)
 - [Secrets & Security](#secrets--security)
   - [Password and Secrets CLIs](#password-and-secrets-clis)
-  - [Encrypted Secrets (Bitwarden Secrets Manager)](#encrypted-secrets-bitwarden-secrets-manager)
+  - [Encrypted Secrets (no Bitwarden required)](#encrypted-secrets-no-bitwarden-required)
   - [Gist Sync](#gist-sync-automation-both-platforms)
   - [Global Git Hooks](#global-git-hooks)
   - [Supply Chain Defense](#supply-chain-defense)
@@ -143,7 +143,7 @@ This repo is highly personal — it reflects one person's workflow, opinions, an
 | Editor settings (VSCode/Cursor merge logic)        | Ghostty theme aliases             |
 | Cleanup automation (Downloads/Screenshots)         | Specific API keys and gist IDs    |
 | Gist sync (bidirectional SSH config/identity sync) | Cloud setup scripts (RunPod user) |
-| BWS encrypted secrets workflow                     | Plugin marketplace selections     |
+| Encrypted secrets workflow (file / fnox / BWS)     | Plugin marketplace selections     |
 
 
 All personal values are centralized in [`config.sh`](./config.sh) — edit `DOTFILES_USERNAME`, `DOTFILES_REPO`, `GIST_SYNC_ID`, `GIT_USER_NAME`, and `GIT_USER_EMAIL` to make it yours.
@@ -222,7 +222,7 @@ Deploy configurations (sources aliases for .zshrc, applies oh-my-zsh settings, e
 - **AI tools**: Claude Code, Codex CLI, Serena MCP, Ghostty terminal
 - **Git**: gitconfig, global gitignore/gitattributes, global git hooks (secret detection)
 - **Dev tools**: htop, pdb++, matplotlib styles, `claude-tools` Rust binary
-- **Secrets**: GitHub gist sync, Bitwarden Secrets Manager (BWS)
+- **Secrets**: GitHub gist sync, age-encrypted local/fnox stores (Bitwarden optional)
 - **Supply chain**: 7-day quarantine for npm/bun/pnpm/uv, weekly dep-audit
 - **Automation**: file cleanup (macOS), Claude Code session cleanup, AI tools auto-update, package auto-update, text replacements sync (macOS)
 
@@ -697,28 +697,40 @@ op --help
 
 The normal cross-platform package set also includes `age`, `sops`, `yq`, `watchexec`, `lazydocker`, and `shfmt`.
 
-### Encrypted Secrets (Bitwarden Secrets Manager)
+### Encrypted Secrets (no Bitwarden required)
 
-API keys are stored in [Bitwarden Secrets Manager](https://bitwarden.com/products/secrets-manager/) (BWS) — a hosted, team-shareable secrets vault. The CLI (`bws`) fetches secrets on demand; nothing is written to disk except a machine access token.
+API keys live in a pluggable secrets backend and are **not** globally exported. Auto-detect order:
+
+1. **bws** — [Bitwarden Secrets Manager](https://bitwarden.com/products/secrets-manager/) (optional)
+2. **file** — age-encrypted dotenv at `$DOTFILES_SECRETS_DIR/secrets.env.enc`
+3. **fnox** — project [`fnox.toml`](./fnox.toml) with age (or other providers)
 
 **File locations:**
 
 | File | Location | Purpose |
 |------|----------|---------|
-| BWS token | `~/.config/bws/token` | Machine access token (paste from Bitwarden on new machines) |
+| Encrypted store | `$DOTFILES_SECRETS_DIR/secrets.env.enc` | Local age-encrypted dotenv (`file` backend) |
+| Age identity | `$DOTFILES_SECRETS_DIR/age.key` (or `~/.config/fnox/age.txt`) | Decrypts `file` / `fnox` stores |
+| fnox config | `$DOT_DIR/fnox.toml` | Encrypted secrets in git (`fnox` backend) |
+| BWS token | `~/.config/bws/token` | Optional machine token for Bitwarden |
 
 **Commands:**
 
 ```bash
-secrets-init bws         # First-time setup: save BWS access token
+secrets-init file        # Local age store (no Bitwarden)
+secrets-init fnox        # Project fnox.toml + age (no Bitwarden)
+secrets-init bws         # Optional: Bitwarden Secrets Manager
 secrets-edit             # Add/update/delete secrets (fzf TUI or: secrets-edit KEY VALUE)
-secrets-paths            # Show resolved backend + token path
+secrets-paths            # Show resolved backend + paths
 ```
 
-**New machine setup:**
+**New machine setup (recommended, offline-friendly):**
 
-1. Run `./install.sh` (installs bws CLI)
-2. Run `secrets-init bws` and paste your BWS access token from Bitwarden
+1. Run `./install.sh` (installs `age`; `fnox` via `--secrets-cli`)
+2. Run `secrets-init file` **or** `secrets-init fnox`
+3. Copy your age identity onto the machine if you already have one (`~/.config/fnox/age.txt` or `$DOTFILES_SECRETS_DIR/age.key`)
+
+**Optional Bitwarden setup:** `secrets-init bws` and paste a machine access token.
 
 **Per-project usage:** Run `setup-envrc` in any repo to create a `.envrc` that selectively exposes only the secrets that repo should see. It supports direct exports (`KEY`), renamed exports (`ENV_VAR=SECRET_NAME`), and a repo-specific Telegram plugin binding (`--telegram-secret SECRET_NAME`). If local `.env` files already exist, the TUI scans the repo root recursively and can offer to delete selected files.
 

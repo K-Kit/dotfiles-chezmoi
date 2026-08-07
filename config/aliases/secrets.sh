@@ -16,31 +16,38 @@ secrets-edit() {
     local backend
     backend=$(dotfiles_secrets_backend)
     case "$backend" in
-        bws)
+        bws|file|fnox)
             if [[ $# -ge 1 ]]; then
                 # Direct mode: secrets-edit KEY [VALUE] [--note DESC]
                 dotfiles-secrets set "$@"
                 return
             fi
             command -v fzf >/dev/null 2>&1 || { echo "fzf required for interactive mode. Use: secrets-edit KEY [VALUE]" >&2; return 1; }
-            _secrets_edit_bws_fzf
+            _secrets_edit_fzf "$backend"
             ;;
         none)
-            echo "No secrets backend. Run: secrets-init" >&2; return 1
+            echo "No secrets backend. Run: secrets-init file   # or: secrets-init fnox | secrets-init bws" >&2
+            return 1
+            ;;
+        *)
+            echo "Unknown secrets backend: $backend" >&2
+            return 1
             ;;
     esac
 }
-_secrets_edit_bws_fzf() {
+_secrets_edit_fzf() {
+    local backend="${1:-bws}"
     local mutated=false
+    local prompt_label="$backend"
     while true; do
         local listing items=()
         listing=$(dotfiles-secrets list-full 2>/dev/null) || { echo "Failed to list secrets" >&2; return 1; }
 
-        while IFS=$'\t' read -r _id env_name bws_key preview note; do
+        while IFS=$'\t' read -r _id env_name store_key preview note; do
             [[ -n "$_id" ]] || continue
             local line="$env_name"
-            if [[ "$bws_key" != "$env_name" ]]; then
-                line+=$'\t'"(bws: $bws_key)"
+            if [[ "$store_key" != "$env_name" ]]; then
+                line+=$'\t'"($backend: $store_key)"
             else
                 line+=$'\t'
             fi
@@ -55,7 +62,7 @@ _secrets_edit_bws_fzf() {
 
         local selection action chosen chosen_env
         selection=$(printf '%s\n' "${items[@]}" | fzf \
-            --prompt="secrets> " \
+            --prompt="secrets ($prompt_label)> " \
             --header="Enter: edit value | Ctrl-A: add | Ctrl-X: delete | Esc: done" \
             --expect=ctrl-a,ctrl-x \
             --delimiter=$'\t' \
@@ -71,8 +78,11 @@ _secrets_edit_bws_fzf() {
                 printf 'Key (ENV_VAR_NAME): ' >/dev/tty
                 read -r new_key </dev/tty
                 [[ -n "$new_key" ]] || continue
-                printf 'Description (optional, appended as "KEY - desc"): ' >/dev/tty
-                read -r new_desc </dev/tty
+                local new_desc=""
+                if [[ "$backend" == "bws" || "$backend" == "fnox" ]]; then
+                    printf 'Description (optional): ' >/dev/tty
+                    read -r new_desc </dev/tty
+                fi
                 printf 'Value: ' >/dev/tty
                 read -rs new_value </dev/tty
                 echo "" >/dev/tty
@@ -116,7 +126,9 @@ secrets-init() {
         choice="$1"
     elif command -v fzf >/dev/null 2>&1; then
         choice=$(printf '%s\n' \
-            "bws	Set up Bitwarden Secrets Manager (recommended, multi-machine)" \
+            "file	Local age-encrypted secrets (no Bitwarden; secrets.env.enc)" \
+            "fnox	Project fnox.toml with age encryption (no Bitwarden)" \
+            "bws	Bitwarden Secrets Manager (multi-machine sync)" \
             "project	Configure secrets for current repo (setup-envrc)" \
             | fzf --prompt="secrets-init> " \
                   --header="What do you want to set up?" \
@@ -124,15 +136,117 @@ secrets-init() {
                   --delimiter=$'\t' \
             | cut -f1) || return 0
     else
-        echo "Usage: secrets-init [bws|project]" >&2
+        echo "Usage: secrets-init [file|fnox|bws|project]" >&2
         return 1
     fi
 
     case "$choice" in
+        file)    secrets-init-file ;;
+        fnox)    secrets-init-fnox ;;
         bws)     secrets-init-bws ;;
         project) setup-envrc ;;
-        *)       echo "Unknown option: $choice. Use 'bws' or 'project'." >&2; return 1 ;;
+        *)       echo "Unknown option: $choice. Use 'file', 'fnox', 'bws', or 'project'." >&2; return 1 ;;
     esac
+}
+
+secrets-init-file() {
+    if ! command -v age >/dev/null 2>&1 || ! command -v age-keygen >/dev/null 2>&1; then
+        echo "Error: age/age-keygen not found — install packages first:" >&2
+        echo "  ./install.sh --minimal --core" >&2
+        return 1
+    fi
+
+    local secrets_dir enc_file key_file
+    secrets_dir=$(dotfiles_secrets_dir)
+    enc_file=$(dotfiles_secrets_enc_file)
+    key_file="$secrets_dir/age.key"
+
+    mkdir -p "$secrets_dir"
+    chmod 700 "$secrets_dir"
+
+    if [[ ! -f "$key_file" ]]; then
+        # Reuse an existing fnox/sops age key when present so one identity decrypts both stores.
+        if [[ -f "${HOME}/.config/fnox/age.txt" ]]; then
+            cp "${HOME}/.config/fnox/age.txt" "$key_file"
+            chmod 600 "$key_file"
+            echo "Copied age identity from ~/.config/fnox/age.txt → $key_file"
+        elif [[ -f "${HOME}/.config/sops/age/keys.txt" ]]; then
+            cp "${HOME}/.config/sops/age/keys.txt" "$key_file"
+            chmod 600 "$key_file"
+            echo "Copied age identity from ~/.config/sops/age/keys.txt → $key_file"
+        else
+            age-keygen -o "$key_file" >/dev/null
+            chmod 600 "$key_file"
+            echo "Generated age identity: $key_file"
+        fi
+    else
+        echo "Age identity already exists: $key_file"
+    fi
+
+    if [[ ! -f "$enc_file" ]]; then
+        # Encrypt an empty dotenv so the file backend auto-detects immediately.
+        if ! printf '' | age -e -i "$key_file" -o "$enc_file"; then
+            echo "Error: failed to create $enc_file" >&2
+            return 1
+        fi
+        chmod 600 "$enc_file"
+        echo "Created empty encrypted store: $enc_file"
+    else
+        echo "Encrypted store already exists: $enc_file"
+    fi
+
+    echo "Backend: $(dotfiles_secrets_backend)"
+    echo "Next: secrets-edit / setup-envrc / with-secrets KEY -- cmd"
+}
+
+secrets-init-fnox() {
+    if ! command -v fnox >/dev/null 2>&1; then
+        echo "Error: fnox not found — install it first:" >&2
+        echo "  ./install.sh --only secrets-cli" >&2
+        return 1
+    fi
+    if ! command -v age-keygen >/dev/null 2>&1; then
+        echo "Error: age-keygen not found — install age first (./install.sh)" >&2
+        return 1
+    fi
+
+    local key_file="${HOME}/.config/fnox/age.txt"
+    mkdir -p "${HOME}/.config/fnox"
+    chmod 700 "${HOME}/.config/fnox"
+
+    if [[ ! -f "$key_file" ]]; then
+        age-keygen -o "$key_file" >/dev/null
+        chmod 600 "$key_file"
+        echo "Generated age identity: $key_file"
+    else
+        echo "Age identity already exists: $key_file"
+    fi
+
+    local cfg pubkey
+    cfg="${DOT_DIR:-$PWD}/fnox.toml"
+    pubkey=$(grep '# public key:' "$key_file" | awk '{print $4}')
+    if [[ ! -f "$cfg" ]]; then
+        cat > "$cfg" <<EOF
+default_provider = "encrypted"
+
+[providers.encrypted]
+type = "age"
+recipients = ["$pubkey"]
+key_file = "~/.config/fnox/age.txt"
+
+[secrets]
+EOF
+        echo "Created $cfg"
+    else
+        echo "fnox config already exists: $cfg"
+        echo "Ensure [providers.encrypted] recipients includes:"
+        echo "  $pubkey"
+    fi
+
+    export FNOX_AGE_KEY_FILE="$key_file"
+    echo "Backend: $(dotfiles_secrets_backend)"
+    echo "Next: fnox set KEY value   # or: secrets-edit"
+    echo "      setup-envrc / with-secrets KEY -- cmd"
 }
 
 secrets-init-bws() {

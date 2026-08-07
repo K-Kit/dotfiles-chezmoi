@@ -31,7 +31,7 @@ If you're an AI agent (Claude Code, Codex, etc.) working in this repo, read this
 | Add install/deploy side effect | Prefer `home/.chezmoiscripts/`; legacy body still in `install.sh`/`deploy.sh` |
 | Add a custom binary | Drop it in `custom_bins/` (already on PATH); `chmod +x` |
 | Install/manage Mac apps | Add a line to `config/apps.conf` → run `app-picker` (gum TUI) → `brew bundle --file=config/Brewfile`. Official casks + `mas` only, **no third-party taps**. Then `scripts/setup/auth-setup` |
-| Add an encrypted secret | `secrets-edit` (interactive dotenv editor) |
+| Add an encrypted secret | `secrets-init file` (or `fnox` / `bws`) then `secrets-edit` |
 | Run an experiment with resource caps | `jexp uv run python -m ...` (Linux: needs pueue + systemd user session) |
 | Commit / commit + push + PR | `/commit` skill or `/commit-push-sync` |
 | Switch active plugin context | `claude-tools context <profile>` (composable: `code python frontend`) |
@@ -155,7 +155,7 @@ Each component in `deploy.sh` is deployed with inline logic or helper functions:
 - Alfred prefs repair - Fixes Dropbox-synced Alfred breakage (macOS only): strips `com.apple.quarantine` xattrs that block workflow scripts (`posix_spawn: error 1`), restores lost script `+x` bits, and seeds the per-machine summon hotkey from a golden snapshot. Runs `custom_bins/alfred-fix`; capture a new golden hotkey with `alfred-fix --capture`. Clipboard history is intentionally local-only and never syncs (Alfred design) — it starts fresh on each machine.
 - Bear CLI symlink - `/Applications/Bear.app/Contents/MacOS/bearcli` → `/usr/local/bin/bearcli` (macOS only, so `bearcli` works in cron/scripts where shell aliases don't apply)
 - Text replacements - Bidirectional sync with macOS + Alfred snippets (daily 9 AM, requires Full Disk Access for terminal app). macOS uses raw shortcuts; Alfred applies collection prefix at runtime (e.g., `fm.hi`)
-- Encrypted secrets (BWS) - Stores API keys via Bitwarden Secrets Manager. Run `secrets-init bws` to configure.
+- Encrypted secrets - Pluggable backends: local age file, fnox.toml, or optional Bitwarden. Run `secrets-init file` (no Bitwarden) or `secrets-init fnox` / `secrets-init bws`.
 - File cleanup - Downloads/Screenshots cleanup (macOS only, launchd)
 - Claude Code cleanup - No-output-for-24h session cleanup (tmux preserved, launchd/cron)
 - AI tools auto-update - Daily update of Claude Code, Codex CLI, OpenCode, Antigravity CLI (6 AM, launchd/cron)
@@ -255,8 +255,10 @@ codex/                    # Codex CLI configuration (symlinked to ~/.codex/)
 
 .secrets                  # Legacy decrypted secrets file (gitignored, no longer the primary runtime path)
 
-# Private dotfiles runtime secrets (BWS token) live outside this repo:
-#   $BWS_TOKEN_FILE (default: ~/.config/bws/token)
+# Private runtime secrets live outside git:
+#   file: $DOTFILES_SECRETS_DIR/secrets.env.enc + age.key
+#   fnox: ~/.config/fnox/age.txt (ciphertext may live in fnox.toml)
+#   optional BWS: $BWS_TOKEN_FILE (default: ~/.config/bws/token)
 
 custom_bins/              # Custom utilities (added to PATH)
 ├── utc_date              # Outputs YYYY-MM-DD in UTC
@@ -315,7 +317,7 @@ Subtleties worth knowing per deploy component. Full mechanics live in the matchi
 | Component | Mechanism | Key gotcha |
 |-----------|-----------|------------|
 | **Gist Sync** (`deploy_secrets`) | Bidirectional sync of `~/.ssh/config`, `authorized_keys`, `config/user.conf` with gist `3cc239...371`. `authorized_keys` uses **disable-wins union merge** (local is always canonical base; whole-line-commented keys are tombstones that suppress that key everywhere even if gist still lists it active); `~/.ssh/config` and `user.conf` use last-modified-wins. Daily 8 AM (launchd/cron). | Requires `gh auth login`. Manual: `sync-gist`. Runs before git config (user.conf provides identity). Merge logic in `scripts/shared/merge_authorized_keys.py`; active convention: `<type> <blob> [## note]`; disable convention: `# <type> <blob>` under `# --- Disabled / pending deletion ---`. |
-| **Encrypted Secrets** (BWS) | API keys in Bitwarden Secrets Manager. **NOT globally exported** — use `setup-envrc` per repo (direnv), or `with-secrets KEY... -- <cmd>` for one-shot. Managed: `OPENAI/OPENROUTER/ANTHROPIC_API_KEY`, `HF_TOKEN`, `MODAL_TOKEN_ID/SECRET`. | BWS token at `~/.config/bws/token`. Run `secrets-init bws` on new machines. Use `secrets-edit` to add/update secrets. |
+| **Encrypted Secrets** (file / fnox / BWS) | API keys in a pluggable backend. Auto-detect: `bws` → `file` (`$DOTFILES_SECRETS_DIR/secrets.env.enc`) → `fnox` (`fnox.toml`). **NOT globally exported** — use `setup-envrc` per repo (direnv), or `with-secrets KEY... -- <cmd>` for one-shot. | No Bitwarden required: `secrets-init file` or `secrets-init fnox`. Optional BWS: token at `~/.config/bws/token` via `secrets-init bws`. Edit with `secrets-edit`. |
 | **Obsidian Sync** (`--no-obsidian-sync`) | Writes `auth_token` and per-vault `encryptionKey`/`encryptionSalt` into `~/.config/obsidian-headless/` from BWS (`OBSIDIAN_AUTH_TOKEN`, `OBSIDIAN_ENCRYPTION_KEY`, `OBSIDIAN_ENCRYPTION_SALT` — never templated/committed). Any vault whose `sync.log` has no `"Fully synced"` entry yet is force-set to `ob sync-config --mode pull-only`; a vault with sync history is never touched, so a manual promotion sticks across redeploys. | Promote a vault to bidirectional **only** by hand: `ob sync-config --path <vault-path> --mode bidirectional` — never automated by this block or by `obsidian-sync-check`. Run `obsidian-sync-check [--path <vault-path>]` (advisory only, never changes mode) to see if a pull-only vault looks safe to promote. Root incident this guards against: a 2026-06/07 bidirectional sync against an incomplete local copy misread "never downloaded" as "deleted" and propagated deletions upstream (135 files lost, recovered via pull-only reconciliation). |
 | **Git Config** (`deploy_git_config`) | Reads `config/user.conf`; prompts on conflicts. Deploys split ignores: `~/.gitignore_global` (git, broad), `~/.ignore_global` (ripgrep, narrow), `~/.config/fd/ignore` (fd). Result: git ignores `data/`/`archive/`, but search tools can still see them. | `fd` has no `--no-ignore-global` flag — use `fd -I` to traverse research dirs. |
 | **Editor Settings** (`deploy_editor_settings`) | Merges into VSCode/Cursor/Antigravity settings (no overwrite, existing wins). Auto-installs 38 curated extensions from `vscode_extensions.txt`. | Antigravity CLI at `/Applications/Antigravity.app/Contents/Resources/app/bin/antigravity`. |
@@ -400,7 +402,7 @@ import petriplot as pp  # For Petri-specific plotting helpers
 - **Ghostty config**: Symlinked to platform-specific path, requires reload after changes (Cmd+Shift+Comma)
 - **Zed config**: Symlinked (like Ghostty/Claude). `ssh_connections` are machine-specific (added via Zed UI, hosts from ~/.ssh/config)
 - **Antigravity config**: VSCode fork by Google (`com.google.antigravity`). Same settings as Cursor, deployed via `--editor` flag. CLI at `/Applications/Antigravity.app/Contents/Resources/app/bin/antigravity`
-- **Secrets (BWS)**: BWS token at `~/.config/bws/token`. Run `secrets-init bws` on new machines (paste token from Bitwarden). Use `secrets-edit` to add/update/delete secrets.
+- **Secrets (file / fnox / BWS)**: Prefer `secrets-init file` (age-encrypted `secrets.env.enc`) or `secrets-init fnox` — neither needs Bitwarden. Optional BWS token at `~/.config/bws/token` via `secrets-init bws`. Use `secrets-edit` to add/update/delete secrets.
 - **Secrets are per-project**: API keys require `setup-envrc` in each project. Running `npm postinstall` or `pip install` in a project without `.envrc` cannot access secrets (this is intentional — supply chain defense). Legacy `.secrets` / `.env` files may still exist locally but are no longer the intended runtime path.
 - **min-release-age quarantine**: All package managers have a 7-day delay on new releases. Packages published <7 days ago will fail to install. This is intentional. See `claude/rules/supply-chain-security.md` for override syntax
 - **Pueue + systemd slices**: `j*` aliases require pueue + systemd user session. `systemd --user` doesn't work inside Claude Code sandbox (bubblewrap blocks D-Bus) — test from normal shell. Cgroup delegation may need one-time `sudo systemctl set-property user-$(id -u).slice Delegate=yes`. Config in `config/resources.conf` (edit when scaling machine).
