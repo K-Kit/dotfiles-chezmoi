@@ -1,0 +1,29 @@
+name: Build Space image
+
+on:
+  pull_request:
+    paths:
+      - "runpod/**"
+      - "config.sh"
+      - "install.sh"
+      - "deploy.sh"
+      - "scripts/shared/helpers.sh"
+      - ".dockerignore"
+      - ".github/workflows/space-image.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: runpod/space.Dockerfile
+          push: false
+          tags: dotfiles-space:test

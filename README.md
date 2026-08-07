@@ -1,72 +1,892 @@
-# dotfiles-chezmoi
+# dotfiles
 
-Chezmoi **source repository** for [K-Kit/dotfiles-ai](https://github.com/K-Kit/dotfiles-ai).
+**Highly opinionated** development environment for AI safety research. ZSH, Tmux, Vim, SSH, and AI coding assistants across macOS, Linux, and cloud containers.
 
-This repo holds the chezmoi source state (`home/` via `.chezmoiroot`), profiles, and `run_onchange` scripts. Config content (`config/`, `claude/`, `codex/`, `install.sh`, etc.) lives in **dotfiles-ai** and is cloned to `~/code/dotfiles-ai` on first apply.
+This setup reflects workflows optimized for ML research: reproducibility, experiment tracking, async API patterns, and rigorous methodology. The AI assistant configurations enforce research discipline—interview before planning, plan before implementing, skepticism of surprisingly good results.
 
-## Two-repo layout
+**Key highlights:**
 
-| Repo | Role |
-|------|------|
-| **dotfiles-chezmoi** (this repo) | chezmoi source: managed paths, profiles, apply scripts |
-| **dotfiles-ai** | Content + installers: shell config, AI configs, packages |
+- 🤖 **AI Coding Assistants** - Extensively configured Claude Code, plus Codex CLI, OpenCode, and Antigravity CLI support
+- 👻 **[Ghostty](https://ghostty.org/)** - Fast, GPU-accelerated terminal with sensible defaults
+- 📊 **[htop](https://htop.dev/)** - Dynamic CPU meter configuration that adapts to your core count
+- 🦀 **Rust-powered CLI tools** - Modern, blazing-fast replacements for standard Unix utilities
+- 🧹 **Automatic cleanup** - Scheduled cleanup of Downloads/Screenshots (macOS, moves to trash)
 
-Symlinks in `home/` point at `{{ .dot_dir }}/config/...` (default `~/code/dotfiles-ai`).
+> Originally forked from [jplhughes/dotfiles](https://github.com/jplhughes/dotfiles) - thanks John for the solid foundation!
+
+> **AI agents working here:** start with [`CLAUDE.md`](./CLAUDE.md) — it has a Quick Reference, deploy-component table, and operational gotchas. This README is human-oriented onboarding; CLAUDE.md is the operational doc.
 
 ## Quickstart
 
+This project offers two quickstart paths: **Local** and **Cloud**.
+
+Everything lives in **this repo**: chezmoi source (`home/`) plus content (`config/`, `claude/`, installers). Managed with **[chezmoi](https://www.chezmoi.io/)**.
+
+---
+
+### Local Quickstart
+
+For setting up on your personal machine (macOS, Linux, desktop/laptop):
+
 ```bash
-# Install chezmoi
+# Install chezmoi (once)
 sh -c "$(curl -fsSL https://get.chezmoi.io)"
 
-# Init + apply (clones dotfiles-ai automatically on first run)
+# Init + apply (one clone)
 CHEZMOI_PROFILE=personal chezmoi init --apply K-Kit/dotfiles-chezmoi
 
-# From a local clone
+# Dev: local checkout
 git clone https://github.com/K-Kit/dotfiles-chezmoi.git ~/code/dotfiles-chezmoi
-CHEZMOI_PROFILE=personal chezmoi --source ~/code/dotfiles-chezmoi init --apply
+cd ~/code/dotfiles-chezmoi
+CHEZMOI_PROFILE=personal chezmoi --source "$PWD" init --apply
+
+# Restart your shell
+source ~/.zshrc
 ```
 
-## Profiles
+Profiles: `personal` (default), `server`, `cloud`, `minimal` — see [`home/.chezmoidata/profiles.yaml`](home/.chezmoidata/profiles.yaml).
 
-Set `CHEZMOI_PROFILE` to one of: `personal`, `server`, `cloud`, `minimal`.
-
-Component flags: [`home/.chezmoidata/profiles.yaml`](home/.chezmoidata/profiles.yaml).
-
-## Environment
-
-| Variable | Default | Purpose |
-|----------|---------|---------|
-| `CHEZMOI_PROFILE` | `personal` | Profile name |
-| `DOT_DIR` | `$CODE_DIR/dotfiles-ai` | Path to dotfiles-ai clone |
-| `DOTFILES_REPO` | `https://github.com/K-Kit/dotfiles-ai.git` | Content repo URL |
-| `DOTFILES_BRANCH` | `main` | Content repo branch |
-| `CODE_DIR` | `~/code` | Base directory for clones |
-
-## Cloud / RunPod
-
-[`dotfiles-ai/scripts/cloud/setup.sh`](https://github.com/K-Kit/dotfiles-ai/blob/main/scripts/cloud/setup.sh) installs chezmoi, clones both repos, and runs `chezmoi apply` with `CHEZMOI_PROFILE=cloud`.
-
-## Development
+Legacy wrappers (forward to chezmoi when installed):
 
 ```bash
-# Dry-run file deploy only (skip install scripts)
-CHEZMOI_PROFILE=cloud CHEZMOI_NON_INTERACTIVE=1 \
-  chezmoi --source "$PWD" apply --exclude scripts
-
-# List managed targets
-chezmoi --source "$PWD" managed
+./install.sh --profile=personal
+./deploy.sh --profile=personal
 ```
 
-## Structure
+Use `--only <component>` on install/deploy to run the legacy selective path without forwarding.
+
+
+---
+
+### Cloud Quickstart
+
+For cloud environments (RunPod, Hetzner, Lambda Labs, etc):
+
+1. **SSH into your new remote machine as root.**
+2. **Run the one-liner:**
+   ```bash
+   # RunPod (fresh pod) — create-user first, then setup (branch required)
+   curl -fsSL https://raw.githubusercontent.com/K-Kit/dotfiles-chezmoi/main/scripts/cloud/create-user.sh | bash
+   curl -fsSL https://raw.githubusercontent.com/K-Kit/dotfiles-chezmoi/main/scripts/cloud/setup.sh | bash -s -- main
+
+   # Hetzner / standard VPS (persistent /home)
+   curl -fsSL https://raw.githubusercontent.com/K-Kit/dotfiles-chezmoi/main/scripts/cloud/setup.sh | bash -s -- main
+   ```
+   This creates a non-root user, installs dependencies, clones this repo, and runs `chezmoi apply` with `CHEZMOI_PROFILE=cloud` (a lean remote-dev set — no pueue/zotero/Rust toolchain).
+
+   Provisions the **`main`** branch by default. To pin another branch, pass it as the first arg (use `bash -s --` to forward args through `curl | bash`) or set `DOTFILES_BRANCH`:
+   ```bash
+   curl -fsSL https://raw.githubusercontent.com/K-Kit/dotfiles-chezmoi/main/scripts/cloud/setup.sh | bash -s -- next
+   ```
+3. **Reconnect as your user:**
+   ```bash
+   ssh kit@<ip>
+   ```
+4. **(Optional) After pod restart** (RunPod recreates `/etc/passwd`):
+   ```bash
+   curl -fsSL https://raw.githubusercontent.com/K-Kit/dotfiles-chezmoi/main/scripts/cloud/restart.sh | bash
+   ```
+5. **(Optional) Customize components:**
+   Edit [`config.sh`](./config.sh) to disable resource-intensive options (AI assistants, cleanup automation, etc.) before running install/deploy.
+
+**Tip:** The setup auto-detects cloud providers and adjusts accordingly (persistent storage paths, SSH config, no macOS-only features). See [`scripts/cloud/README.md`](./scripts/cloud/README.md) for details.
+
+## Table of Contents
+
+- [Quickstart](#quickstart)
+- [Adopting These Dotfiles](#adopting-these-dotfiles)
+- [Rust CLI Tools](#rust-cli-tools)
+- [Installation](#installation)
+  - [Step 1: Install dependencies](#step-1-install-dependencies)
+  - [Step 2: Deploy configurations](#step-2-deploy-configurations)
+- [AI Assistants](#ai-assistants)
+  - [Claude Code](#claude-code-primary-ai-assistant)
+  - [Codex CLI](#codex-cli-openai)
+  - [Antigravity CLI + OpenCode](#antigravity-cli-google--opencode)
+  - [Agentation](#agentation)
+- [Terminal & Shell](#terminal--shell)
+  - [Ghostty](#ghostty-terminal-emulator)
+  - [Powerlevel10k Prompt](#powerlevel10k-prompt)
+  - [Claude Code Statusline](#claude-code-statusline)
+  - [SSH Key Management](#ssh-key-management)
+- [Dev Tools](#dev-tools)
+  - [htop](#htop-process-monitor)
+  - [pdb++](#pdb-python-debugger)
+- [Secrets & Security](#secrets--security)
+  - [Password and Secrets CLIs](#password-and-secrets-clis)
+  - [Encrypted Secrets (Bitwarden Secrets Manager)](#encrypted-secrets-bitwarden-secrets-manager)
+  - [Gist Sync](#gist-sync-automation-both-platforms)
+  - [Global Git Hooks](#global-git-hooks)
+  - [Supply Chain Defense](#supply-chain-defense)
+- [Automation](#automation)
+  - [Automatic Cleanup](#automatic-cleanup-macos)
+  - [Claude Code Session Cleanup](#claude-code-session-cleanup-both-platforms)
+  - [AI Tools Auto-Update](#ai-tools-auto-update-both-platforms)
+  - [Package Auto-Update](#package-auto-update-both-platforms)
+  - [Text Replacements](#text-replacements-macos)
+- [Cloud Setup](#cloud-setup-runpod-hetzner-etc)
+- [Portable Space Container](#portable-space-container)
+- [Getting to Know These Dotfiles](#getting-to-know-these-dotfiles)
+
+## Adopting These Dotfiles
+
+This repo is highly personal — it reflects one person's workflow, opinions, and tooling choices. The best way to use it is to **point a coding agent at this repo and ask it to extract the parts you find useful** into your own dotfiles.
+
+**What's generalizable vs personal:**
+
+
+| Generalizable (worth extracting)                   | Personal (skip or replace)        |
+| -------------------------------------------------- | --------------------------------- |
+| Shell config (zsh/tmux/p10k)                       | Claude Code plugins/agents/skills |
+| Modern CLI tools (bat, eza, fd, rg, etc.)          | Website alias, SSH host colors    |
+| Git config + global gitignore/gitattributes        | Mouseless config                  |
+| Editor settings (VSCode/Cursor merge logic)        | Ghostty theme aliases             |
+| Cleanup automation (Downloads/Screenshots)         | Specific API keys and gist IDs    |
+| Gist sync (bidirectional SSH config/identity sync) | Cloud setup scripts (RunPod user) |
+| BWS encrypted secrets workflow                     | Plugin marketplace selections     |
+
+
+All personal values are centralized in [`config.sh`](./config.sh) — edit `DOTFILES_USERNAME`, `DOTFILES_REPO`, `GIST_SYNC_ID`, `GIT_USER_NAME`, and `GIT_USER_EMAIL` to make it yours.
+
+## Rust CLI Tools
+
+These modern alternatives are installed by default and significantly faster than their traditional counterparts:
+
+
+| Tool                                                        | Replaces      | Why it's better                                          |
+| ----------------------------------------------------------- | ------------- | -------------------------------------------------------- |
+| [`bat`](https://github.com/sharkdp/bat)                     | `cat`         | Syntax highlighting, line numbers, git integration       |
+| [`eza`](https://github.com/eza-community/eza)               | `ls`          | Colors, icons, git status, tree view built-in            |
+| [`fd`](https://github.com/sharkdp/fd)                       | `find`        | Intuitive syntax, respects `.gitignore`, 5x faster       |
+| [`ripgrep`](https://github.com/BurntSushi/ripgrep) (`rg`)   | `grep`        | Recursive by default, respects `.gitignore`, 10x+ faster |
+| [`delta`](https://github.com/dandavison/delta)              | `diff`        | Side-by-side, syntax highlighting, line numbers          |
+| [`zoxide`](https://github.com/ajeetdsouza/zoxide)           | `cd`          | Learns your habits, jump with `z dirname`                |
+| [`dust`](https://github.com/bootandy/dust)                  | `du`          | Intuitive visualization of disk usage                    |
+| [`jless`](https://github.com/PaulJuliusMartinez/jless)      | `less` (JSON) | Interactive JSON viewer with vim keybindings             |
+
+
+**Extras** (`--extras` flag):
+
+- [`hyperfine`](https://github.com/sharkdp/hyperfine) — statistical benchmarking with warmup and multiple runs
+- [`gitui`](https://github.com/extrawurst/gitui) — TUI for git
+- [`code2prompt`](https://github.com/mufeedvh/code2prompt) — generate LLM prompts from codebases
+
+## Installation
+
+### Step 1: Install dependencies
+
+Install dependencies (e.g. oh-my-zsh and related plugins). The installer auto-detects your OS and applies sensible defaults.
+
+```bash
+# Install with defaults (recommended)
+./install.sh
+
+# Install only specific components
+./install.sh --minimal --tmux --zsh  # --minimal disables all defaults
+```
+
+**Defaults by platform:**
+
+
+| Platform  | Defaults                                                                            |
+| --------- | ----------------------------------------------------------------------------------- |
+| **macOS** | zsh, tmux, AI tools, cleanup + Rust CLI tools via Homebrew                          |
+| **Linux** | zsh, tmux, AI tools, create-user + Rust CLI tools via [mise](https://mise.jdx.dev/) |
+
+
+Installation on macOS requires Homebrew - install from [brew.sh](https://brew.sh/) first if needed.
+
+### Step 2: Deploy configurations
+
+Deploy configurations (sources aliases for .zshrc, applies oh-my-zsh settings, etc.). All settings live in [`config.sh`](./config.sh) — edit once, deploy everywhere.
+
+```bash
+# Deploy with defaults (recommended)
+./deploy.sh
+
+# Profiles
+./deploy.sh --profile=server    # Safe base for shared machines
+./deploy.sh --profile=minimal   # Nothing enabled — specify what you want
+
+# Deploy only specific components
+./deploy.sh --only vim claude   # Only vim and claude, nothing else
+
+# Add to defaults
+./deploy.sh --mouseless         # Defaults + mouseless
+```
+
+**Default components:**
+
+- **Shell**: ZSH, tmux, vim, Powerlevel10k
+- **Editors**: VSCode/Cursor/Antigravity (merged settings), Zed (symlinked config + keymap), `.editorconfig`, `.curlrc`, `.inputrc`
+- **AI tools**: Claude Code, Codex CLI, Serena MCP, Ghostty terminal
+- **Git**: gitconfig, global gitignore/gitattributes, global git hooks (secret detection)
+- **Dev tools**: htop, pdb++, matplotlib styles, `claude-tools` Rust binary
+- **Secrets**: GitHub gist sync, Bitwarden Secrets Manager (BWS)
+- **Supply chain**: 7-day quarantine for npm/bun/pnpm/uv, weekly dep-audit
+- **Automation**: file cleanup (macOS), Claude Code session cleanup, AI tools auto-update, package auto-update, text replacements sync (macOS)
+
+**Flags are additive** — e.g., `./deploy.sh --mouseless` deploys defaults + mouseless. Use `--minimal` to disable all defaults, then specify only what you want.
+
+## AI Assistants
+
+### Claude Code (Primary AI Assistant)
+
+This setup includes extensive [Claude Code](https://docs.anthropic.com/en/docs/claude-code) customization optimized for AI safety research:
+
+```bash
+./deploy.sh --claude  # Symlinks claude/ → ~/.claude
+```
+
+**What's included:**
+
+- **`CLAUDE.md`** — Slim identity file (~120 lines) pointing at modular rules and docs
+- **`rules/`** — 19 auto-loaded behavioral rules (safety, git, agents, refusal alternatives, supply-chain, browser automation, etc.)
+- **`docs/`** — On-demand knowledge loaded by skills (research methodology, async patterns, tmux, agent teams)
+- **`agents/`** — Personal agents (kept lean — most specialized agents live in plugins like `ai-safety-plugins`)
+- **`skills/`** — Project-level slash commands: `/commit`, `/merge-worktree`, `/jobs`, `/modal`, `/log-gap`, `/recall-feedback`, `/mv-repo`, etc.
+- **`hooks/`** — 40+ PreToolUse/PostToolUse/SessionStart scripts: auto-classify, secret blocking, modern-tool nudges, post-rebase guards, network audit
+- **`templates/`** — Context profiles (`contexts/profiles.yaml`), research spec template
+
+**Smart merge preserves your data** - if `~/.claude` already exists, credentials, history, and cache are automatically restored after symlinking.
+
+#### Claude Code Plugin Marketplaces
+
+Claude Code supports community plugin marketplaces. These are registered in [`claude/templates/contexts/profiles.yaml`](claude/templates/contexts/profiles.yaml) and synced via `claude-tools context --sync`:
+
+
+| Marketplace                                                                         | What's in it                                                     |
+| ----------------------------------------------------------------------------------- | ---------------------------------------------------------------- |
+| **[claude-plugins-official](https://github.com/anthropics/claude-plugins-official)** | Superpowers, hookify, plugin-dev, commit-commands, productivity, engineering |
+| **[ai-safety-plugins](https://github.com/yulonglin/ai-safety-plugins)**             | Research, writing, code, workflow, viz — for AI safety work      |
+| **[productivity-tools](https://github.com/yulonglin/productivity-tools)**           | Personal productivity utilities                                  |
+| **[ui-ux-pro-max-skill](https://github.com/nextlevelbuilder/ui-ux-pro-max-skill)**  | Design styles, palettes, production-grade frontend               |
+| **[alignment-hive](https://github.com/Crazytieguy/alignment-hive)**                 | Alignment research utilities                                     |
+| **[dev-browser-marketplace](https://github.com/sawyerhood/dev-browser)**            | Browser automation for development                               |
+| **[openai-codex](https://github.com/crazytieguy/codex-plugin-cc)**                  | Codex CLI integration plugins                                    |
+
+
+Profiles are managed via the `claude-tools context` CLI — compose multiple profiles to control which plugins load per-project:
+
+```bash
+claude-tools context code               # Software projects
+claude-tools context code typescript python    # Compose multiple profiles
+claude-tools context --list             # Show active plugins and available profiles
+```
+
+### Codex CLI (OpenAI)
+
+[Codex CLI](https://github.com/openai/codex) configuration that reuses Claude Code's skills:
+
+```bash
+./deploy.sh --codex  # Symlinks codex/ → ~/.codex
+```
+
+**What's included:**
+
+- **`AGENTS.md`** — Global instructions (references CLAUDE.md as source of truth)
+- **`config.toml`** — Model settings, status line config, and per-project trust levels
+- **`rules/`** — Behavioral rule files synced from Claude Code's `rules/`
+- **`skills/`** → symlink to `claude/skills/` so both CLIs share the same skill set
+
+The configuration follows the same research discipline as Claude Code but adapted for Codex's execution model.
+
+### Antigravity CLI (Google) + OpenCode
+
+Gemini CLI was retired by Google on **2026-06-18**; [Antigravity CLI](https://antigravity.google/docs/cli-features) (`agy`) is its official successor. [OpenCode](https://opencode.ai) is installed alongside as a model-agnostic OSS option. Both are installed by the `ai-tools` component.
+
+Antigravity CLI can sync with Claude Code skills:
+
+```bash
+./scripts/sync_claude_to_antigravity.sh  # Symlinks Claude skills into agy
+```
+
+**What it does:**
+
+- Symlinks Claude Code skills to `~/.gemini/antigravity-cli/skills/`
+- Project instructions come from `AGENTS.md` (Antigravity reads it natively)
+
+**Note:** Antigravity CLI is closed-source and brand-new; its skills/permissions schema differs from Claude's. The skills sync is adapted but untested end-to-end — permission sync is not yet ported (see the script header).
+
+OpenCode also has a managed global configuration:
+
+```bash
+./deploy.sh --opencode
+```
+
+This deploys `config/opencode/opencode.json`, reuses the shared Claude skills directory, disables public session sharing, and includes an opt-in Agentation MCP server.
+
+### Agentation
+
+The shared `agentation` skill installs the development-only React toolbar in compatible projects. Agentation's MCP server is registered centrally for Claude and Codex; OpenCode keeps it disabled globally so unrelated projects do not pay its context/startup cost.
+
+```bash
+# Ask the agent to use the shared agentation skill, then verify live sync:
+npx -y agentation-mcp doctor
+```
+
+Restart the coding agent after enabling MCP sync in a project.
+
+## Terminal & Shell
+
+### Ghostty (Terminal Emulator)
+
+[Ghostty](https://ghostty.org/) is a fast, GPU-accelerated terminal written in Zig. Config is symlinked to the platform-specific location:
+
+```bash
+./deploy.sh --ghostty  # Part of defaults
+```
+
+**Key settings in `config/ghostty.conf`:**
+
+- `Cmd+C` triggers shell-based copy (integrates with tmux)
+- `Shift+Enter` for multiline input
+- Sensible font and color defaults
+
+Config location: macOS `~/Library/Application Support/com.mitchellh.ghostty/config`, Linux `~/.config/ghostty/config`
+
+#### Theme Aliases
+
+Launch new Ghostty windows with different color themes - useful for visually distinguishing contexts:
+
+
+Default Ghostty config uses Catppuccin Mocha. The `g0`–`g9` aliases launch a new window with a different theme:
+
+| Alias | Theme                        | Character                          |
+| ----- | ---------------------------- | ---------------------------------- |
+| `g0`  | TokyoNight                   | Deep blue bg — neon city           |
+| `g1`  | Dracula                      | Purple-grey bg — vibrant classic   |
+| `g2`  | Nord                         | Arctic blue-grey bg — calm         |
+| `g3`  | Rose Pine                    | Deep purple bg — botanical         |
+| `g4`  | Kanagawa Dragon              | Warm near-black bg — Japanese ink  |
+| `g5`  | Gruvbox Dark                 | Neutral warm bg — retro            |
+| `g6`  | Everforest Dark Hard         | Green-grey bg — forest             |
+| `g7`  | Solarized Dark Higher Contrast | Dark teal bg — high contrast     |
+| `g8`  | Melange Dark                 | Warm brown bg — earthy             |
+| `g9`  | Material Ocean               | Near-black bg — minimal            |
+
+
+```bash
+g1                        # Launch Ghostty with Dracula theme
+gtheme "Tomorrow Night"   # Launch with any theme by name
+ghostty +list-themes      # See all available themes
+```
+
+Each alias opens a **single fresh window** (no tab restoration) with the specified theme.
+
+#### SSH Color Switching
+
+Terminal colors automatically change when SSH-ing to help identify which machine you're on. Colors revert when the session ends.
+
+```bash
+ssh myserver     # In Ghostty: colors change automatically
+sshc myserver    # Explicit color-changing SSH (works in any terminal)
+```
+
+**Configure per-host colors** by editing `SSH_HOST_COLORS` in `config/ssh_themes.sh`:
+
+```bash
+# Format: "background:foreground:cursor" in hex
+SSH_HOST_COLORS[prod*]="#3d0000:#ffffff:#ff6666"      # Red-tinted for production
+SSH_HOST_COLORS[dev*]="#002200:#ffffff:#66ff66"       # Green-tinted for dev
+SSH_HOST_COLORS[gpu*]="#1a0033:#ffffff:#cc66ff"       # Purple for GPU servers
+SSH_HOST_COLORS[default]="#0d1926:#c5d4dd:#88c0d0"    # Blue-gray fallback
+```
+
+Patterns support wildcards (`prod*` matches `prod1`, `prod-web`, etc.). The `default` key applies to any host without a specific match.
+
+#### Open Remote Directories on macOS
+
+From a Linux SSH session, use the portable launchers in `custom_bins/` to open the current Linux directory on your Mac:
+
+```bash
+cursor-remote .          # Cursor Remote SSH in the current directory
+cursor-remote ..         # Cursor Remote SSH in the parent directory
+warp-remote .            # Warp SSH session in the current directory
+warp-remote ..           # Warp SSH session in the parent directory
+```
+
+The command is `cursor-remote .`, not `cursor remote .`. Relative paths are resolved on Linux before the request is relayed, so the Mac never interprets `.` or `..` against its own filesystem. Paths containing spaces or single quotes are supported.
+
+Defaults are the Linux SSH alias `pop-os`, path `/home/kit`, and macOS launcher alias `mbp`. Override them in your shell environment when machine aliases differ:
+
+```bash
+export DOTFILES_LAUNCHER_HOST=my-mac
+export DOTFILES_REMOTE_HOST=my-linux-host
+export DOTFILES_REMOTE_PATH=/home/me
+```
+
+Use `--host HOST` to override the Linux target for one invocation, and use `--` before a path beginning with `-`:
+
+```bash
+cursor-remote --host gpu-box /srv/project
+warp-remote --host gpu-box -- -project
+```
+
+The Linux launcher uses the installed command on the Mac when available and otherwise streams its own source over SSH. Cursor also discovers the CLI inside system-wide and per-user `Cursor.app` bundles, which covers noninteractive macOS SSH sessions where `cursor` is absent from `PATH`. Warp writes its generated launch configuration privately to `~/.warp/launch_configurations/dotfiles-remote.yaml`; that runtime file is not part of the dotfiles repository.
+
+### Powerlevel10k Prompt
+
+[Powerlevel10k](https://github.com/romkatv/powerlevel10k) provides a fast, feature-rich ZSH prompt. This config includes custom segments for SSH-aware machine identification.
+
+**Requirements**: Install a [Nerd Font](https://github.com/romkatv/powerlevel10k#meslo-nerd-font-patched-for-powerlevel10k) for icons.
+
+**Reconfigure**: Run `p10k configure` (when prompted, overwrite `p10k.zsh` but don't apply to `.zshrc`).
+
+
+| Segment         | Description                                              |
+| --------------- | -------------------------------------------------------- |
+| **Remote host** | Machine name + emoji (SSH sessions only)                 |
+| **Directory**   | Current path with git root highlighting                  |
+| **Git status**  | Branch, dirty indicator, stash count                     |
+| **Right side**  | Exit code, command duration, Python venv, cloud contexts |
+
+
+#### SSH-Aware Machine Identification
+
+When SSH'd to a remote machine, the prompt shows a **consistent machine name** derived from your SSH config:
 
 ```
-dotfiles-chezmoi/
-├── .chezmoiroot              → home
-├── .chezmoi.toml.tmpl        # profile + dot_dir defaults
-├── home/                     # chezmoi source state → ~/
-│   ├── .chezmoidata/profiles.yaml
-│   ├── .chezmoiscripts/      # run_once / run_onchange
-│   └── dot_*, symlink_*      # managed dotfiles
-└── scripts/lib.sh            # shared helpers (sources dotfiles-ai config.sh)
+🌊 mats ~/code/project (main)                   # Instead of: user@ip-172-31-42-17
 ```
+
+Each machine gets a **unique emoji** based on its name hash, so you can visually distinguish machines at a glance.
+
+**How it works:**
+
+1. Looks up your public IP against `~/.ssh/config` `HostName` entries
+2. Uses the matching `Host` alias as the display name
+3. Falls back to abbreviated hostname if no match
+4. Hashes the name to assign a stable emoji from a curated palette
+
+**Example SSH config:**
+
+```
+Host mats
+    HostName 203.0.113.42
+    User yulong
+
+Host hetzner-gpu
+    HostName 198.51.100.10
+    User root
+```
+
+SSH to `203.0.113.42` → prompt shows `🌊 mats` instead of the IP or hostname.
+
+**Customization:**
+
+- `SERVER_NAME` env var overrides everything
+- `MACHINE_EMOJI` env var overrides the auto-assigned emoji
+
+### Claude Code Statusline
+
+Claude Code displays a custom statusline with session info. Configuration: `claude/settings.json` (`statusLine.command = "claude-tools statusline"`).
+
+```
+🌊 mats [code python] ~/code/project (main*) · 📊 45% · $0.23 · 12m
+│        │             │              │      │        │        └─ Session duration
+│        │             │              │      │        └─ Session cost
+│        │             │              │      └─ Context usage (color-coded)
+│        │             │              └─ Branch (* = dirty)
+│        │             └─ Active Claude context profiles
+│        └─ Directory
+└─ Machine name (SSH only, same as p10k)
+```
+
+**Features:**
+
+- **Machine name**: Uses same `machine-name` script as Powerlevel10k for consistency
+- **Git info**: Branch with dirty indicator
+- **Context %**: Color-coded usage (green <70%, yellow 70-89%, red 90%+)
+- **Cost**: Running session total in USD
+- **Duration**: Session runtime in minutes/hours
+
+`ccusage statusline` is not wired into the live Claude hook path because it can OOM on large local histories; guard logic still uses lightweight `ccusage blocks --active --json` where available.
+
+Both the shell prompt and Claude Code statusline use your SSH config aliases, so machine identification is consistent across tools.
+
+### Ignore Pattern Management
+
+`claude-tools ignore` manages per-repo `.gitignore` and `.ignore` patterns interactively.
+
+```bash
+claude-tools ignore                    # Launch TUI (same as `ignore apply`)
+claude-tools ignore apply              # Interactive pattern selection
+claude-tools ignore apply --dry-run    # Preview without writing
+claude-tools ignore apply --non-interactive  # Apply defaults without TUI
+claude-tools ignore status             # Show current managed patterns
+```
+
+The TUI shows patterns grouped by category with tri-state toggles:
+- `[   ]` skip — pattern not applied
+- `[ G ]` gitignore — added to `.gitignore` only
+- `[G+S]` gitignore + searchable — added to `.gitignore` AND negated in `.ignore`
+
+Patterns in `[G+S]` state are git-ignored but remain searchable by rg, fd, Claude Code, and Cursor. Pattern definitions live in `config/ignore/patterns`.
+
+### Codex Statusline
+
+Codex uses built-in status items configured in `codex/config.toml` under `[tui].status_line` (for example: model, current dir, git branch, weekly/5h limits, context remaining).
+
+### SSH Key Management
+
+Automatically adds your SSH key to ssh-agent on shell startup:
+
+```bash
+# Automatically enabled when you deploy ZSH config
+./deploy.sh  # (default: includes ZSH)
+```
+
+**How it works:**
+
+- Checks for `~/.ssh/id_ed25519` (customizable via `SSH_KEY_PATH` env var)
+- **Prompts to generate** if key doesn't exist (never overwrites existing keys)
+- Adds to macOS Keychain (`--apple-use-keychain`) or Linux ssh-agent
+- Only runs in interactive shells
+- Skips if key already loaded in agent
+
+**First-time setup flow:**
+
+1. Shell starts → detects no key → prompts "Generate a new ed25519 SSH key now? [y/N]"
+2. If yes → generates key → shows command to copy public key
+3. Automatically adds to agent on this and future shell sessions
+
+**Custom key path:**
+
+```bash
+export SSH_KEY_PATH=~/.ssh/id_rsa  # Use RSA key instead
+```
+
+Configuration: [`config/ssh_setup.sh`](config/ssh_setup.sh)
+
+## Dev Tools
+
+### htop (Process Monitor)
+
+Dynamic [htop](https://htop.dev/) configuration that adapts CPU meters to your core count:
+
+```bash
+./deploy.sh --htop  # Part of defaults
+```
+
+The config in `config/htop/htoprc` uses a dynamic layout that works across machines with different CPU counts—no manual adjustment needed.
+
+### pdb++ (Python Debugger)
+
+High-contrast color scheme for [pdb++](https://github.com/pdbpp/pdbpp), the enhanced Python debugger:
+
+```bash
+./deploy.sh --pdb  # Part of defaults
+```
+
+**Global config works with per-project installations**. The config is deployed to `~/.pdbrc.py` (symlinked), but pdb++is installed per-project via `uv add --dev pdbpp`. This works because pdb++ reads the global config at runtime.
+
+**Auto-detects terminal background** using OSC 11 escape sequence:
+
+- **Light terminals**: Dark colors on light background (solarized-light theme)
+- **Dark terminals**: Bright colors on dark background (monokai theme)
+- **Fallback**: Defaults to dark theme if detection fails (SSH, older terminals)
+
+Detection succeeds in modern terminals (iTerm2, Ghostty, Kitty, Alacritty) and fails gracefully elsewhere.
+
+**Test it works:**
+
+```bash
+cd /path/to/project
+uv add --dev pdbpp
+python -c "import pdb; pdb.set_trace()" <<< "c"
+# Should show high-contrast colors
+```
+
+**Per-project override** (advanced): Create `.pdbrc.py` in project root. It takes precedence over the global config. See [pdb++ docs](https://github.com/pdbpp/pdbpp#configuration) for details.
+
+## Automation
+
+### Automatic Cleanup (macOS)
+
+Scheduled cleanup of old files from `~/Downloads` and `~/Screenshots`:
+
+```bash
+./deploy.sh --cleanup  # Part of macOS defaults
+```
+
+**How it works:**
+
+- Moves files older than 180 days (configurable) to **Trash** (not permanent delete)
+- Runs monthly via launchd
+- Only deletes files not accessed AND not modified in retention period
+
+```bash
+# Preview what would be cleaned
+./scripts/cleanup/cleanup_old_files.sh --dry-run
+
+# Custom retention (90 days) and schedule (weekly)
+./scripts/cleanup/install.sh --days 90 --schedule weekly
+```
+
+See [`scripts/cleanup/README.md`](./scripts/cleanup/README.md) for full documentation.
+
+### Claude Code Session Cleanup (both platforms)
+
+Automatically kills idle Claude Code processes daily at 17:00:
+
+```bash
+./deploy.sh --claude-cleanup  # Part of defaults (both macOS and Linux)
+```
+
+**How it works:**
+
+- Only kills processes with **no output activity for 24h** (preserves active + tmux sessions)
+- Runs daily via launchd (macOS) or cron (Linux)
+- Manual control via `clear-claude-code` command (aliases: `ccl`, `cci`, `ccf`)
+
+```bash
+# Check status
+clear-claude-code --list
+
+# Uninstall
+./scripts/cleanup/setup_claude_cleanup.sh --uninstall
+```
+
+### AI Tools Auto-Update (both platforms)
+
+Daily automatic updates for Claude Code, Codex CLI, OpenCode, and Antigravity CLI at 06:00:
+
+```bash
+./deploy.sh --ai-update  # Part of defaults
+```
+
+Runs via launchd (macOS) or cron (Linux). Uninstall with `scripts/cleanup/setup_ai_update.sh --uninstall`.
+
+### Package Auto-Update (both platforms)
+
+Weekly package upgrade + cleanup on Sundays at 05:00:
+
+```bash
+./deploy.sh --brew-update  # Part of defaults
+```
+
+Supports Homebrew (macOS), apt, dnf, and pacman (Linux). Includes cleanup of stale caches.
+
+### Text Replacements (macOS)
+
+Bidirectional sync between macOS text replacements and [Alfred](https://www.alfredapp.com/) snippets. Runs daily at 09:00:
+
+```bash
+./deploy.sh --text-replacements  # macOS only, part of defaults
+```
+
+macOS uses raw shortcuts; Alfred applies a collection prefix at runtime (e.g., `fm.hi`). Requires Full Disk Access for your terminal app.
+
+## Secrets & Security
+
+### Password and Secrets CLIs
+
+The default `secrets-cli` installer component adds three complementary tools:
+
+- [Proton Pass CLI](https://protonpass.github.io/pass-cli/) (`pass-cli`) for Proton vault items and agent-scoped tokens.
+- [fnox](https://fnox.jdx.dev/) for project `fnox.toml` files backed by encrypted values or remote providers.
+- [1Password CLI](https://www.1password.dev/cli/) (`op`) for vault access and `op run` secret injection.
+
+```bash
+./install.sh --only secrets-cli
+pass-cli --help
+fnox --help
+op --help
+```
+
+The normal cross-platform package set also includes `age`, `sops`, `yq`, `watchexec`, `lazydocker`, and `shfmt`.
+
+### Encrypted Secrets (Bitwarden Secrets Manager)
+
+API keys are stored in [Bitwarden Secrets Manager](https://bitwarden.com/products/secrets-manager/) (BWS) — a hosted, team-shareable secrets vault. The CLI (`bws`) fetches secrets on demand; nothing is written to disk except a machine access token.
+
+**File locations:**
+
+| File | Location | Purpose |
+|------|----------|---------|
+| BWS token | `~/.config/bws/token` | Machine access token (paste from Bitwarden on new machines) |
+
+**Commands:**
+
+```bash
+secrets-init bws         # First-time setup: save BWS access token
+secrets-edit             # Add/update/delete secrets (fzf TUI or: secrets-edit KEY VALUE)
+secrets-paths            # Show resolved backend + token path
+```
+
+**New machine setup:**
+
+1. Run `./install.sh` (installs bws CLI)
+2. Run `secrets-init bws` and paste your BWS access token from Bitwarden
+
+**Per-project usage:** Run `setup-envrc` in any repo to create a `.envrc` that selectively exposes only the secrets that repo should see. It supports direct exports (`KEY`), renamed exports (`ENV_VAR=SECRET_NAME`), and a repo-specific Telegram plugin binding (`--telegram-secret SECRET_NAME`). If local `.env` files already exist, the TUI scans the repo root recursively and can offer to delete selected files.
+
+`setup-envrc` tries `direnv allow` automatically. If that cannot update direnv's allowlist (for example in a sandboxed environment), it prints the manual `direnv allow .` command and still completes the rest of the setup.
+
+### Gist Sync Automation (both platforms)
+
+Automatically sync config with GitHub gist daily at 08:00:
+
+```bash
+./deploy.sh --secrets  # Part of defaults
+```
+
+**How it works:**
+
+- Bidirectional sync with GitHub gist (SSH config, authorized_keys, git identity)
+- Auto-adds local public key to `authorized_keys` (enables SSH between your machines)
+- Last-modified wins: compares local vs gist timestamps
+- Requires `gh auth login` (run once for authentication)
+- Runs daily via launchd (macOS) or cron (Linux)
+
+```bash
+# Manual sync
+sync-gist
+
+# Uninstall automation
+./scripts/cleanup/setup_gist_sync.sh --uninstall
+```
+
+> **Note:** Secret gists are unlisted, not encrypted. Only non-secret config (SSH config, authorized_keys, git identity) should be synced via gist.
+
+### Global Git Hooks
+
+Pre-commit hooks for secret detection across all repositories:
+
+```bash
+./deploy.sh --git-hooks  # Part of defaults
+```
+
+Scans staged files for API keys, tokens, and credentials before each commit.
+
+### Supply Chain Defense
+
+Multi-layer defense against npm/PyPI supply chain attacks (axios 2026, litellm 2026, shai-hulud 2025). Deployed automatically with `./deploy.sh`.
+
+**What it does:**
+
+| Layer | Defense | What it blocks |
+|-------|---------|----------------|
+| 7-day quarantine | `min-release-age` on all package managers | Freshly-published malicious versions (caught within days) |
+| Script blocking | `ignore-scripts=true` in npm/pnpm | Postinstall scripts that exfiltrate secrets or install RATs |
+| Credential isolation | API keys scoped per-project via direnv | Compromised package in project A can't read project B's keys |
+| Lockfile scanning | Pre-commit hook checks changed lockfiles | Known-bad packages entering your lockfile |
+| Weekly audit | Scans all repos for known-bad IOCs | Packages you already have that were later found compromised |
+| Claude Code hook | Warns before any `npm install` / `pip install` | AI assistant installing packages without checking them first |
+
+**Day-to-day workflow:**
+
+```bash
+# Installing packages works normally — quarantine is transparent
+npm install express          # Works (express is >7 days old)
+bun add zod                  # Works
+uv add httpx                 # Works
+
+# New packages published <7 days ago are blocked (intentional)
+npm install some-brand-new-pkg
+# Error: min-release-age — package was published 2 days ago
+
+# Override for a specific install (after checking it's safe)
+npm install --min-release-age=0 some-brand-new-pkg   # npm
+bun add --minimumReleaseAge=0 some-brand-new-pkg      # bun
+UV_EXCLUDE_NEWER= uv pip install some-brand-new-pkg   # uv
+```
+
+**Credential isolation:**
+
+API keys stay in `$DOTFILES_SECRETS_DIR/secrets.env.enc` and are NOT globally exported. Each project gets only the keys it needs:
+
+```bash
+# Interactive picker (fzf)
+cd ~/code/my-project
+setup-envrc                  # Select keys with TAB, confirm with ENTER
+# → Creates .envrc with eval-based exports, direnv auto-loads on cd
+
+# Non-interactive
+setup-envrc ANTHROPIC_API_KEY OPENAI_API_KEY
+
+# Map a namespaced secret into the env var your app expects
+setup-envrc ANTHROPIC_API_KEY TELEGRAM_BOT_TOKEN=NUDGE_TELEGRAM_BOT_TOKEN
+
+# Claude Telegram plugin: keep the token canonical in dotfiles-secrets,
+# and generate .claude/channels/telegram/.env only at launch time
+setup-envrc --telegram-secret AMBASSADOR_TELEGRAM_BOT_TOKEN
+
+# Check what's configured
+setup-envrc --list           # Show keys in current .envrc
+setup-envrc --clean          # Remove .envrc
+
+# One-off command with selected keys (no .envrc needed)
+with-secrets ANTHROPIC_API_KEY OPENAI_API_KEY -- python my_script.py
+```
+
+**Manual audit:**
+
+```bash
+dep-audit                    # Scan all repos for known-bad packages now
+# Runs automatically every Sunday at 10 AM
+```
+
+**Config files deployed:**
+
+| File | Deployed to | Purpose |
+|------|-------------|---------|
+| `config/npmrc` | `~/.npmrc` | `ignore-scripts=true` + `min-release-age=7` |
+| `config/bunfig.toml` | `~/.bunfig.toml` | `minimumReleaseAge=604800` (seconds) |
+| `config/pnpmrc` | `~/Library/Preferences/pnpm/rc` | `minimum-release-age=10080` (minutes) |
+| `config/uv.toml` | `~/.config/uv/uv.toml` | `exclude-newer` (via `UV_EXCLUDE_NEWER` env var) |
+
+**Selective deploy:**
+
+```bash
+./deploy.sh --only pkg-configs    # Just package manager configs
+./deploy.sh --no-pkg-configs      # Everything except package configs
+./deploy.sh --only dep-audit      # Just the weekly audit
+```
+
+## Getting to know these dotfiles
+
+- Any software or command line tools you need, add them to the [install.sh](./install.sh) script. Try adding a new command line tool to the install script.
+- Any new plugins or environment setup, add them to the [config/zshrc.sh](./config/zshrc.sh) script.
+- Any aliases you need, add them to the relevant `config/aliases/<theme>.sh` file (git.sh for git, nav.sh for navigation, net.sh for network/system, etc.). Try adding your own alias to the bottom of the matching file. For example, try setting `cd1` to your most used git repo so you can just type `cd1` to get to it.
+- **Utility functions** in `config/modern_tools.sh`: `mkd` (mkdir+cd), `cdf` (cd to Finder window, macOS), `targz` (smart compression), `dataurl`, `digga` (DNS lookup), `getcertnames` (SSL certs), `o` (cross-platform open), `server` (quick HTTP server)
+- **System aliases** in `config/aliases/net.sh`: `flush` (DNS cache), `afk` (lock screen, macOS), `week` (ISO week number)
+
+## Cloud Setup (RunPod, Hetzner, etc.)
+
+One-command setup for cloud VMs and containers:
+
+```bash
+# RunPod (fresh pod, as root)
+curl -fsSL https://raw.githubusercontent.com/K-Kit/dotfiles-chezmoi/main/scripts/cloud/create-user.sh | bash
+curl -fsSL https://raw.githubusercontent.com/K-Kit/dotfiles-chezmoi/main/scripts/cloud/setup.sh | bash -s -- main
+
+# After pod restart (recreates user entry)
+curl -fsSL https://raw.githubusercontent.com/K-Kit/dotfiles-chezmoi/main/scripts/cloud/restart.sh | bash
+
+# Hetzner / standard VPS
+curl -fsSL https://raw.githubusercontent.com/K-Kit/dotfiles-chezmoi/main/scripts/cloud/setup.sh | bash -s -- main
+```
+
+Then SSH as `kit@<ip>` (not root). Runs the lean `cloud` profile and provisions the given branch. See [`scripts/cloud/README.md`](./scripts/cloud/README.md) for details.
+
+**What it does:**
+
+- Creates non-root user in persistent storage (`/workspace` symlinks on RunPod)
+- Installs uv, clones this repo, runs chezmoi apply
+- Copies SSH keys for direct access
+
+## Portable Space Container
+
+`runpod/space.Dockerfile` builds the complete personal profile on Ubuntu 24.04. The same image supports both requested Docker modes:
+
+```bash
+# Control the host Docker daemon through its socket
+SPACE_WORKSPACE="$PWD" docker compose -f runpod/compose.yml run --rm workspace
+
+# Start a separate Docker daemon inside a privileged container
+SPACE_WORKSPACE="$PWD" docker compose -f runpod/compose.yml --profile dind run --rm dind
+```
+
+The host-socket mode has root-equivalent access to the host Docker daemon. Docker-in-Docker is isolated from that daemon but requires `privileged: true`. See [`runpod/README.md`](./runpod/README.md) for build and usage details.

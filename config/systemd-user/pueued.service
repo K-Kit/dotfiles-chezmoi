@@ -1,0 +1,11 @@
+[Unit]
+Description=Pueue Daemon
+
+[Service]
+Environment=PATH=%h/.cargo/bin:%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=pueued --verbose
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

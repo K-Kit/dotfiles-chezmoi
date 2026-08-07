@@ -1,14 +1,14 @@
 # Source from chezmoi onchange scripts after exporting DOT_DIR.
-# DOT_DIR must point at the dotfiles-ai (content) repo, not this chezmoi repo.
+# Single-repo layout: DOT_DIR is the chezmoi working tree (repo root; sibling of home/).
 
-: "${DOT_DIR:?DOT_DIR must be set to the dotfiles-ai clone path}"
+: "${DOT_DIR:?DOT_DIR must be set to the dotfiles checkout (repo root with config/)}"
 
 PROFILE="${CHEZMOI_PROFILE:-${PROFILE:-personal}}"
 export PROFILE DOT_DIR
 export CHEZMOI_NON_INTERACTIVE="${CHEZMOI_NON_INTERACTIVE:-0}"
 
 if [[ ! -d "$DOT_DIR/config" ]]; then
-  echo "  ⚠ DOT_DIR=$DOT_DIR missing config/ — run chezmoi apply (clone-dotfiles runs first)" >&2
+  echo "  ⚠ DOT_DIR=$DOT_DIR missing config/ — expected single-repo checkout" >&2
   exit 1
 fi
 

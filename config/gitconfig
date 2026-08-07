@@ -1,0 +1,56 @@
+# Git configuration template
+# This file will be merged with your existing .gitconfig during deployment.
+# Identity is set from config/user.conf at deploy time (see config/user.conf.example);
+# the placeholders below are only a fallback if user.conf is absent.
+
+[user]
+    email = you@example.com
+    name = Your Name
+
+[push]
+    autoSetupRemote = true
+    default = simple
+
+[init]
+    defaultBranch = main
+
+[alias]
+    # Better git log with colors and graph
+    lg = log --color --graph --pretty=format:'%Cred%h%Creset -%C(yellow)%d%Creset %s %Cgreen(%cr) %C(bold blue)<%an>%Creset' --abbrev-commit
+
+[core]
+    # Global gitignore file
+    excludesfile = ~/.gitignore_global
+    # Use delta for better diffs (if installed)
+    pager = delta
+
+[interactive]
+    diffFilter = delta --color-only
+
+[delta]
+    navigate = true
+    line-numbers = true
+
+[merge]
+    conflictstyle = zdiff3
+
+[rerere]
+    enabled = true
+    autoUpdate = true
+
+[pull]
+    rebase = true
+
+[rebase]
+    autoStash = true
+    autoSquash = true
+
+[fetch]
+    prune = true
+    pruneTags = true
+
+[diff]
+    colorMoved = default
+
+[url "git@github.com:"]
+    insteadOf = https://github.com/

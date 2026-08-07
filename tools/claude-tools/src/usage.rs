@@ -1,0 +1,629 @@
+//! API usage tracking for Claude Code statusline.
+//!
+//! Fetches 5-hour and 7-day rate limit utilization, plus any model-scoped
+//! weekly limits (e.g. Fable), from the Anthropic OAuth usage endpoint, with
+//! file-based caching (60s TTL) and graceful degradation.
+//!
+//! Fetch strategy: ureq (native Rust) → curl fallback → stale cache → error.
+
+use serde::{Deserialize, Serialize};
+use std::fmt::Write;
+use std::path::PathBuf;
+use std::time::Duration;
+
+// --- Constants ---
+
+const API_URL: &str = "https://api.anthropic.com/api/oauth/usage";
+const CACHE_FILENAME: &str = "claude-statusline-usage.json";
+const CACHE_MAX_AGE: Duration = Duration::from_secs(300);
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(2);
+
+const SEVEN_DAY_SECS: f64 = 7.0 * 86400.0;
+
+// --- API response ---
+
+#[derive(Deserialize, Clone)]
+pub struct UsageResponse {
+    pub five_hour: Option<UsageBucket>,
+    pub seven_day: Option<UsageBucket>,
+    #[serde(default)]
+    pub limits: Vec<Limit>,
+}
+
+#[derive(Deserialize, Clone)]
+pub struct UsageBucket {
+    pub utilization: Option<f64>,
+    pub resets_at: Option<String>,
+}
+
+/// A single named rate-limit entry from the `limits` array, e.g. the
+/// model-scoped weekly limit for a specific model (Fable, Opus, ...).
+#[derive(Deserialize, Clone)]
+pub struct Limit {
+    pub kind: Option<String>,
+    pub percent: Option<f64>,
+    pub resets_at: Option<String>,
+    pub scope: Option<LimitScope>,
+}
+
+#[derive(Deserialize, Clone)]
+pub struct LimitScope {
+    pub model: Option<LimitModel>,
+}
+
+#[derive(Deserialize, Clone)]
+pub struct LimitModel {
+    pub display_name: Option<String>,
+}
+
+/// One account's last-known usage windows (5h, 7d, and any model-scoped
+/// weekly limits), persisted across logout in the multi-account cache
+/// (`~/.claude/usage-data/accounts.json`).
+#[derive(Serialize, Deserialize, Clone, Default)]
+struct AccountEntry {
+    five_hour_resets_at: Option<String>,
+    five_hour_pct: Option<u8>,
+    #[serde(default)]
+    seven_day_resets_at: Option<String>,
+    #[serde(default)]
+    seven_day_pct: Option<u8>,
+    #[serde(default)]
+    weekly_scoped: std::collections::HashMap<String, WeeklyScopedEntry>,
+}
+
+/// One model-scoped weekly limit (e.g. Fable) within an account's snapshot.
+#[derive(Serialize, Deserialize, Clone)]
+struct WeeklyScopedEntry {
+    resets_at: Option<String>,
+    pct: Option<u8>,
+}
+
+// --- Public entry point ---
+
+/// Append usage bars (or error) to output as a second statusline line.
+pub fn format_usage(output: &mut String) {
+    match fetch_cached_usage() {
+        Ok(usage) => format_usage_bars(output, &usage),
+        Err(e) => {
+            output.push('\n');
+            let _ = write!(output, "\x1b[2m\x1b[31m{}\x1b[0m", e);
+        }
+    }
+}
+
+fn format_usage_bars(output: &mut String, usage: &UsageResponse) {
+    let five = usage.five_hour.as_ref().and_then(|b| b.utilization);
+    let seven = usage.seven_day.as_ref().and_then(|b| b.utilization);
+
+    // Snapshot this account into the persistent multi-account cache, keyed
+    // by email, so the *other* (logged-out) account's last-known usage
+    // windows can still be surfaced after switching away from it.
+    let current_email = resolve_account_identity();
+    if let Some(email) = current_email.as_deref() {
+        upsert_account_snapshot(email, usage);
+    }
+
+    if five.is_none() && seven.is_none() {
+        output.push('\n');
+        let _ = write!(output, "\x1b[2m\u{2014}\x1b[0m"); // dim em-dash placeholder
+        if let Some(email) = current_email.as_deref() {
+            render_other_account(output, email);
+        }
+        return;
+    }
+
+    output.push('\n');
+
+    if let Some(pct) = five {
+        let pct = pct.round().clamp(0.0, 100.0) as u8;
+        let resets_at = usage.five_hour.as_ref().and_then(|b| b.resets_at.as_deref());
+        render_bucket(output, "5h", pct, resets_at, 5.0 * 3600.0);
+    }
+
+    if let Some(pct) = seven {
+        let pct = pct.round().clamp(0.0, 100.0) as u8;
+        if five.is_some() {
+            output.push_str("  \u{00b7}  ");
+        }
+        let resets_at = usage.seven_day.as_ref().and_then(|b| b.resets_at.as_deref());
+        render_bucket(output, "7d", pct, resets_at, SEVEN_DAY_SECS);
+    }
+
+    // Model-scoped weekly limits (e.g. Fable) — separate quota from the
+    // aggregate 7d bucket above, surfaced by the API as `weekly_scoped`.
+    for limit in usage.limits.iter().filter(|l| l.kind.as_deref() == Some("weekly_scoped")) {
+        let Some(pct) = limit.percent else { continue };
+        let Some(name) = limit
+            .scope
+            .as_ref()
+            .and_then(|s| s.model.as_ref())
+            .and_then(|m| m.display_name.as_deref())
+        else {
+            continue;
+        };
+        let pct = pct.round().clamp(0.0, 100.0) as u8;
+        output.push_str("  \u{00b7}  ");
+        render_bucket(output, name, pct, limit.resets_at.as_deref(), SEVEN_DAY_SECS);
+    }
+
+    if let Some(email) = current_email.as_deref() {
+        render_other_account(output, email);
+    }
+}
+
+/// Render one rate-limit bucket: bar + pace indicator, colored by pace (not
+/// absolute usage). Pace = how far ahead/behind the linear burn rate you are;
+/// the bar goes warm only when you're burning *faster* than the window allows.
+/// Falls back to absolute-usage color when the reset time is unavailable.
+fn render_bucket(output: &mut String, label: &str, pct: u8, resets_at: Option<&str>, window_secs: f64) {
+    let pace = compute_pace(pct, resets_at, window_secs);
+    let color = match pace {
+        Some((delta, _)) => color_for_pace(delta),
+        None => color_for_pct(pct),
+    };
+    format_bar(output, label, pct, color);
+    if let Some((delta, remaining_secs)) = pace {
+        format_pace(output, delta, remaining_secs, color);
+    }
+}
+
+// --- Bar rendering ---
+
+fn format_bar(output: &mut String, label: &str, pct: u8, color: &str) {
+    const BAR_WIDTH: u8 = 10;
+    let filled = (pct as u16 * BAR_WIDTH as u16 / 100).min(BAR_WIDTH as u16) as u8;
+    let empty = BAR_WIDTH - filled;
+
+    let _ = write!(output, "{}{}\x1b[0m ", color, label);
+    let _ = write!(output, "{}", color);
+    for _ in 0..filled {
+        output.push('●');
+    }
+    output.push_str("\x1b[2m");
+    for _ in 0..empty {
+        output.push('○');
+    }
+    let _ = write!(output, "\x1b[0m {}{}%\x1b[0m", color, pct);
+}
+
+/// Compute pace delta and time-to-reset for a rate-limit bucket.
+///
+/// `window_secs` is the full window duration (e.g., 5*3600 for 5h, 7*86400 for 7d).
+/// Pace delta = how far ahead/behind the linear burn rate you are, in percentage
+/// points. If 4/7 of the window has elapsed and you've used 61%, expected is ~57%
+/// → delta +4 (ahead). Returns `(delta, remaining_secs)`, or `None` when the reset
+/// time is missing or unparseable.
+fn compute_pace(pct: u8, resets_at: Option<&str>, window_secs: f64) -> Option<(i16, f64)> {
+    let resets_at = resets_at?;
+    let reset_epoch = parse_iso_epoch(resets_at)?;
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64;
+
+    let remaining_secs = (reset_epoch - now).max(0) as f64;
+    let elapsed_secs = window_secs - remaining_secs;
+    let elapsed_frac = (elapsed_secs / window_secs).clamp(0.0, 1.0);
+
+    let expected_pct = (elapsed_frac * 100.0).round() as i16;
+    let delta = pct as i16 - expected_pct;
+
+    Some((delta, remaining_secs))
+}
+
+/// Render the pace indicator (signed delta vs linear burn rate) and reset countdown.
+/// `color` is the pace-based color shared with the bar.
+fn format_pace(output: &mut String, delta: i16, remaining_secs: f64, color: &str) {
+    let sign = if delta > 0 { "+" } else { "" };
+    let _ = write!(output, " {}{}{}%\x1b[0m", color, sign, delta);
+
+    // Time remaining until reset
+    let reset_display = fmt_time_remaining(remaining_secs);
+    if !reset_display.is_empty() {
+        let _ = write!(output, " \x1b[2m\u{27f3} {}\x1b[0m", reset_display);
+    }
+}
+
+/// Format remaining seconds as a compact countdown: "2h30m" / "45m" / "5d3h".
+fn fmt_time_remaining(secs: f64) -> String {
+    let mins = (secs / 60.0).round() as u32;
+    let h = mins / 60;
+    let m = mins % 60;
+    if h >= 24 {
+        format!("{}d{}h", h / 24, h % 24)
+    } else if h > 0 {
+        format!("{}h{}m", h, m)
+    } else {
+        format!("{}m", m)
+    }
+}
+
+/// Parse ISO 8601 timestamp to unix epoch. Handles common formats from the API.
+fn parse_iso_epoch(iso: &str) -> Option<i64> {
+    // Try macOS date -j first
+    let stripped = iso.split('.').next().unwrap_or(iso);
+    let stripped = stripped.trim_end_matches('Z');
+
+    // macOS: date -j -f format
+    let output = std::process::Command::new("date")
+        .args(["-j", "-u", "-f", "%Y-%m-%dT%H:%M:%S", stripped, "+%s"])
+        .stderr(std::process::Stdio::null())
+        .output();
+
+    if let Ok(o) = output {
+        if o.status.success() {
+            if let Ok(s) = String::from_utf8(o.stdout) {
+                if let Ok(epoch) = s.trim().parse::<i64>() {
+                    return Some(epoch);
+                }
+            }
+        }
+    }
+
+    // Linux fallback: date -d
+    let output = std::process::Command::new("date")
+        .args(["-d", iso, "+%s"])
+        .stderr(std::process::Stdio::null())
+        .output();
+
+    if let Ok(o) = output {
+        if o.status.success() {
+            if let Ok(s) = String::from_utf8(o.stdout) {
+                if let Ok(epoch) = s.trim().parse::<i64>() {
+                    return Some(epoch);
+                }
+            }
+        }
+    }
+
+    None
+}
+
+/// Color by pace: how far ahead of the linear burn rate (in percentage points).
+/// Warm only when burning *faster* than the window allows; behind/on pace is green.
+fn color_for_pace(delta: i16) -> &'static str {
+    if delta >= 30 {
+        "\x1b[31m" // Red — well ahead, will hit the cap early
+    } else if delta >= 15 {
+        "\x1b[33m" // Yellow — notably ahead
+    } else if delta >= 5 {
+        "\x1b[38;2;255;176;85m" // Orange — mildly ahead
+    } else {
+        "\x1b[32m" // Green — on pace, behind, or barely ahead
+    }
+}
+
+fn color_for_pct(pct: u8) -> &'static str {
+    if pct >= 90 {
+        "\x1b[31m" // Red
+    } else if pct >= 70 {
+        "\x1b[33m" // Yellow
+    } else if pct >= 50 {
+        "\x1b[38;2;255;176;85m" // Orange
+    } else {
+        "\x1b[32m" // Green
+    }
+}
+
+// --- Multi-account tracking ---
+//
+// Account switching here means log-out/log-in on the same ~/.claude — not
+// separate CLAUDE_CONFIG_DIR instances — so only one account's credentials
+// are ever live at a time. We snapshot the *active* account's usage windows
+// (5h, 7d, weekly-scoped) into a persistent, email-keyed cache on every
+// tick, and surface whichever *other* entry exists as a last-known
+// countdown per window. This persists across logout (unlike the volatile
+// TMPDIR usage cache above, which reflects only the currently active
+// account).
+
+/// Current account's identity (email), the multi-account cache key.
+fn resolve_account_identity() -> Option<String> {
+    let home = std::env::var("HOME").ok()?;
+    let path = PathBuf::from(home).join(".claude.json");
+    let data = std::fs::read_to_string(path).ok()?;
+    let json: serde_json::Value = serde_json::from_str(&data).ok()?;
+    json.get("oauthAccount")?
+        .get("emailAddress")?
+        .as_str()
+        .map(|s| s.to_string())
+}
+
+fn accounts_cache_path() -> Option<PathBuf> {
+    let home = std::env::var("HOME").ok()?;
+    let dir = PathBuf::from(home).join(".claude").join("usage-data");
+    std::fs::create_dir_all(&dir).ok()?;
+    Some(dir.join("accounts.json"))
+}
+
+fn read_accounts_cache() -> std::collections::HashMap<String, AccountEntry> {
+    accounts_cache_path()
+        .and_then(|path| std::fs::read_to_string(path).ok())
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default()
+}
+
+/// Merge this tick's usage into the account's persisted snapshot. Only
+/// windows present in `usage` are updated; windows with no data this tick
+/// (e.g. a weekly-scoped limit that dropped out of the API response) keep
+/// their last-known value.
+fn upsert_account_snapshot(email: &str, usage: &UsageResponse) {
+    let Some(path) = accounts_cache_path() else { return };
+    let mut accounts = read_accounts_cache();
+    let mut entry = accounts.remove(email).unwrap_or_default();
+
+    if let Some(bucket) = usage.five_hour.as_ref() {
+        if let (Some(resets_at), Some(pct)) = (bucket.resets_at.as_deref(), bucket.utilization) {
+            entry.five_hour_resets_at = Some(resets_at.to_string());
+            entry.five_hour_pct = Some(pct.round().clamp(0.0, 100.0) as u8);
+        }
+    }
+    if let Some(bucket) = usage.seven_day.as_ref() {
+        if let (Some(resets_at), Some(pct)) = (bucket.resets_at.as_deref(), bucket.utilization) {
+            entry.seven_day_resets_at = Some(resets_at.to_string());
+            entry.seven_day_pct = Some(pct.round().clamp(0.0, 100.0) as u8);
+        }
+    }
+    for limit in usage.limits.iter().filter(|l| l.kind.as_deref() == Some("weekly_scoped")) {
+        let Some(name) = limit
+            .scope
+            .as_ref()
+            .and_then(|s| s.model.as_ref())
+            .and_then(|m| m.display_name.as_deref())
+        else {
+            continue;
+        };
+        let Some(pct) = limit.percent else { continue };
+        entry.weekly_scoped.insert(
+            name.to_string(),
+            WeeklyScopedEntry {
+                resets_at: limit.resets_at.clone(),
+                pct: Some(pct.round().clamp(0.0, 100.0) as u8),
+            },
+        );
+    }
+
+    accounts.insert(email.to_string(), entry);
+    if let Ok(serialized) = serde_json::to_string_pretty(&accounts) {
+        let _ = std::fs::write(&path, serialized);
+    }
+}
+
+/// Surface the other (logged-out) account's last-known usage windows (5h,
+/// 7d, weekly-scoped) as an always-on compact indicator: one "label
+/// countdown"/"label ready" segment per window with cached data, joined by
+/// "·". No-op if no other account has ever synced. Picks the other account
+/// whose 5h window synced most recently, in case more than one exists.
+fn render_other_account(output: &mut String, current_email: &str) {
+    let accounts = read_accounts_cache();
+    let other = accounts
+        .iter()
+        .filter(|(email, _)| email.as_str() != current_email)
+        .filter_map(|(_, entry)| {
+            let epoch = entry.five_hour_resets_at.as_deref().and_then(parse_iso_epoch)?;
+            Some((epoch, entry))
+        })
+        .max_by_key(|(epoch, _)| *epoch)
+        .map(|(_, entry)| entry);
+
+    let Some(entry) = other else { return };
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64;
+
+    let mut windows: Vec<(String, Option<String>)> = vec![
+        ("5h".to_string(), entry.five_hour_resets_at.clone()),
+        ("7d".to_string(), entry.seven_day_resets_at.clone()),
+    ];
+    let mut weekly: Vec<(&String, &WeeklyScopedEntry)> = entry.weekly_scoped.iter().collect();
+    weekly.sort_by_key(|(name, _)| name.as_str());
+    for (name, w) in weekly {
+        windows.push((name.clone(), w.resets_at.clone()));
+    }
+
+    let mut rendered = String::new();
+    for (label, resets_at) in &windows {
+        let Some(epoch) = resets_at.as_deref().and_then(parse_iso_epoch) else { continue };
+        if !rendered.is_empty() {
+            rendered.push_str("  \u{00b7}  ");
+        }
+        if epoch > now {
+            let remaining = (epoch - now) as f64;
+            let _ = write!(rendered, "\x1b[2m{} {}\x1b[0m", label, fmt_time_remaining(remaining));
+        } else {
+            let _ = write!(rendered, "\x1b[32m{} ready\x1b[0m", label);
+        }
+    }
+
+    if rendered.is_empty() {
+        return;
+    }
+
+    output.push_str("  |  \x1b[2m\u{21c4}\x1b[0m ");
+    output.push_str(&rendered);
+}
+
+// --- Caching ---
+
+fn cache_path() -> Option<PathBuf> {
+    let dir = std::env::var("TMPDIR")
+        .unwrap_or_else(|_| "/tmp/claude".to_string());
+    let dir = PathBuf::from(dir);
+    std::fs::create_dir_all(&dir).ok()?;
+    Some(dir.join(CACHE_FILENAME))
+}
+
+fn read_cache() -> Option<(UsageResponse, bool)> {
+    let path = cache_path()?;
+    let metadata = std::fs::metadata(&path).ok()?;
+    let age = metadata.modified().ok()?.elapsed().unwrap_or(Duration::MAX);
+    let fresh = age < CACHE_MAX_AGE;
+    let data = std::fs::read_to_string(&path).ok()?;
+    let usage: UsageResponse = serde_json::from_str(&data).ok()?;
+    Some((usage, fresh))
+}
+
+fn write_cache(data: &str) {
+    if let Some(path) = cache_path() {
+        let _ = std::fs::write(&path, data);
+    }
+}
+
+// --- Token resolution ---
+
+fn resolve_oauth_token() -> Result<String, &'static str> {
+    // 1. Environment variable
+    if let Ok(token) = std::env::var("CLAUDE_CODE_OAUTH_TOKEN") {
+        if !token.is_empty() {
+            return Ok(token);
+        }
+    }
+
+    // 2. macOS Keychain
+    if let Some(token) = token_from_keychain() {
+        return Ok(token);
+    }
+
+    // 3. Credentials file
+    token_from_credentials_file().ok_or("no oauth token found")
+}
+
+fn token_from_keychain() -> Option<String> {
+    let output = std::process::Command::new("security")
+        .args(["find-generic-password", "-s", "Claude Code-credentials", "-w"])
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let blob = String::from_utf8(output.stdout).ok()?;
+    extract_access_token(blob.trim())
+}
+
+fn token_from_credentials_file() -> Option<String> {
+    let home = std::env::var("HOME").ok()?;
+    let path = format!("{}/.claude/.credentials.json", home);
+    let data = std::fs::read_to_string(path).ok()?;
+    extract_access_token(&data)
+}
+
+fn extract_access_token(json_str: &str) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_str(json_str).ok()?;
+    v.get("claudeAiOauth")?
+        .get("accessToken")?
+        .as_str()
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+}
+
+// --- API fetch (ureq → curl fallback) ---
+
+fn fetch_from_api(token: &str) -> Result<(UsageResponse, String), String> {
+    // Try ureq first
+    if let Some(result) = fetch_via_ureq(token) {
+        return Ok(result);
+    }
+
+    // Fall back to curl
+    fetch_via_curl(token)
+}
+
+fn fetch_via_ureq(token: &str) -> Option<(UsageResponse, String)> {
+    let config = ureq::Agent::config_builder()
+        .timeout_global(Some(REQUEST_TIMEOUT))
+        .build();
+    let agent: ureq::Agent = config.into();
+
+    let mut response = agent
+        .get(API_URL)
+        .header("Authorization", &format!("Bearer {}", token))
+        .header("Accept", "application/json")
+        .header("anthropic-beta", "oauth-2025-04-20")
+        .call()
+        .ok()?;
+
+    let body = response.body_mut().read_to_string().ok()?;
+    let usage: UsageResponse = serde_json::from_str(&body).ok()?;
+    Some((usage, body))
+}
+
+fn fetch_via_curl(token: &str) -> Result<(UsageResponse, String), String> {
+    let output = std::process::Command::new("curl")
+        .args([
+            "-s",
+            "--max-time", "2",
+            "-H", &format!("Authorization: Bearer {}", token),
+            "-H", "Accept: application/json",
+            "-H", "anthropic-beta: oauth-2025-04-20",
+            API_URL,
+        ])
+        .stderr(std::process::Stdio::null())
+        .output()
+        .map_err(|_| "curl not available".to_string())?;
+
+    if !output.status.success() {
+        return Err("api request failed".to_string());
+    }
+
+    let body = String::from_utf8(output.stdout)
+        .map_err(|_| "invalid response".to_string())?;
+    let usage: UsageResponse = serde_json::from_str(&body)
+        .map_err(|_| "invalid json from api".to_string())?;
+    Ok((usage, body))
+}
+
+// --- Orchestration ---
+
+/// Return cached usage if fresh, otherwise fetch and update cache.
+/// Falls back to stale cache on fetch failure. Returns error only when
+/// no data is available at all.
+fn fetch_cached_usage() -> Result<UsageResponse, String> {
+    let cached = read_cache();
+
+    // Fresh cache — fast path
+    if let Some((ref usage, true)) = cached {
+        return Ok(usage.clone());
+    }
+
+    // Need to fetch (stale or no cache)
+    let token = resolve_oauth_token();
+
+    if let Ok(ref token) = token {
+        match fetch_from_api(token) {
+            Ok((usage, raw)) => {
+                // Only cache and return if at least one utilization value is present,
+                // otherwise fall through to stale cache
+                let has_data = usage.five_hour.as_ref().and_then(|b| b.utilization).is_some()
+                    || usage.seven_day.as_ref().and_then(|b| b.utilization).is_some();
+                if has_data {
+                    write_cache(&raw);
+                    return Ok(usage);
+                }
+                // Null utilization — prefer stale cache if available
+                if let Some((stale, _)) = &cached {
+                    return Ok(stale.clone());
+                }
+                return Ok(usage);
+            }
+            Err(fetch_err) => {
+                // Fall back to stale cache
+                if let Some((usage, _)) = cached {
+                    return Ok(usage);
+                }
+                return Err(fetch_err);
+            }
+        }
+    }
+
+    // No token — use stale cache or error
+    if let Some((usage, _)) = cached {
+        return Ok(usage);
+    }
+
+    Err(token.unwrap_err().to_string())
+}

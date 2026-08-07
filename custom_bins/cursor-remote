@@ -1,0 +1,166 @@
+#!/bin/sh
+set -eu
+
+usage() {
+  cat <<'EOF'
+Usage: cursor-remote [--host HOST] [REMOTE_PATH]
+
+Open a directory from an SSH host in Cursor on the macOS launcher machine.
+EOF
+}
+
+die() {
+  printf 'cursor-remote: %s\n' "$*" >&2
+  exit 2
+}
+
+shell_quote() {
+  printf "'"
+  printf '%s' "$1" | sed "s/'/'\\\\''/g"
+  printf "'"
+}
+
+validate_value() {
+  value=$1
+  label=$2
+  [ -n "$value" ] || die "$label must not be empty"
+  case "$value" in
+    *'
+'*) die "$label must not contain newlines" ;;
+  esac
+}
+
+resolve_relative_path() {
+  path=$1
+  case "$path" in
+    /*)
+      printf '%s\n' "$path"
+      ;;
+    -*)
+      (CDPATH='' cd -P "./$path" 2>/dev/null && pwd -P) ||
+        die "cannot resolve remote directory: $path"
+      ;;
+    *)
+      (CDPATH='' cd -P "$path" 2>/dev/null && pwd -P) ||
+        die "cannot resolve remote directory: $path"
+      ;;
+  esac
+}
+
+launcher_source_path() {
+  source_path=$0
+  case "$source_path" in
+    /*) ;;
+    */*)
+      source_dir=${source_path%/*}
+      source_name=${source_path##*/}
+      source_dir=$(CDPATH='' cd -P "$source_dir" 2>/dev/null && pwd -P) ||
+        die 'cannot resolve launcher source directory'
+      source_path=$source_dir/$source_name
+      ;;
+    *)
+      source_path=$(command -v "$source_path") || die 'cannot locate launcher source'
+      case "$source_path" in
+        /*) ;;
+        *)
+          source_dir=${source_path%/*}
+          source_name=${source_path##*/}
+          [ "$source_dir" != "$source_path" ] || source_dir=.
+          source_dir=$(CDPATH='' cd -P "$source_dir" 2>/dev/null && pwd -P) ||
+            die 'cannot resolve launcher source directory'
+          source_path=$source_dir/$source_name
+          ;;
+      esac
+      ;;
+  esac
+  [ -f "$source_path" ] || die "launcher source is not a file: $source_path"
+  printf '%s\n' "$source_path"
+}
+
+if [ "${DOTFILES_REMOTE_HOST+x}" = x ]; then
+  remote_host=$DOTFILES_REMOTE_HOST
+else
+  remote_host=pop-os
+fi
+if [ "${DOTFILES_REMOTE_PATH+x}" = x ]; then
+  remote_path=$DOTFILES_REMOTE_PATH
+else
+  remote_path=/home/kit
+fi
+if [ "${DOTFILES_LAUNCHER_HOST+x}" = x ]; then
+  launcher_host=$DOTFILES_LAUNCHER_HOST
+else
+  launcher_host=mbp
+fi
+
+path_set=false
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --host)
+      shift
+      [ "$#" -gt 0 ] || die '--host requires a value'
+      remote_host=$1
+      shift
+      ;;
+    --)
+      shift
+      [ "$#" -gt 0 ] || die '-- requires a path'
+      [ "$path_set" = false ] || die 'only one remote path is allowed'
+      remote_path=$1
+      path_set=true
+      shift
+      [ "$#" -eq 0 ] || die 'only one remote path is allowed'
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    -*)
+      die "unknown option: $1"
+      ;;
+    *)
+      [ "$path_set" = false ] || die 'only one remote path is allowed'
+      remote_path=$1
+      path_set=true
+      shift
+      ;;
+  esac
+done
+
+validate_value "$remote_host" 'remote host'
+validate_value "$remote_path" 'remote path'
+validate_value "$launcher_host" 'launcher host'
+
+case $(uname -s) in
+  Darwin)
+    if command -v cursor >/dev/null 2>&1; then
+      cursor_cli=$(command -v cursor)
+    else
+      cursor_system_cli=${DOTFILES_CURSOR_SYSTEM_CLI:-/Applications/Cursor.app/Contents/Resources/app/bin/cursor}
+      cursor_user_cli=${DOTFILES_CURSOR_USER_CLI:-$HOME/Applications/Cursor.app/Contents/Resources/app/bin/cursor}
+      if [ -x "$cursor_system_cli" ]; then
+        cursor_cli=$cursor_system_cli
+      elif [ -x "$cursor_user_cli" ]; then
+        cursor_cli=$cursor_user_cli
+      else
+        die 'Cursor CLI not found in PATH or a Cursor.app bundle'
+      fi
+    fi
+    exec "$cursor_cli" --remote "ssh-remote+$remote_host" "$remote_path"
+    ;;
+  Linux)
+    command -v ssh >/dev/null 2>&1 || die 'ssh is required on Linux'
+    remote_path=$(resolve_relative_path "$remote_path")
+    quoted_host=$(shell_quote "$remote_host")
+    quoted_path=$(shell_quote "$remote_path")
+    if ssh -- "$launcher_host" 'command -v cursor-remote >/dev/null 2>&1'; then
+      ssh -- "$launcher_host" "cursor-remote --host $quoted_host -- $quoted_path"
+    else
+      launcher_source=$(launcher_source_path)
+      ssh -- "$launcher_host" "sh -s -- --host $quoted_host -- $quoted_path" < "$launcher_source"
+    fi
+    ;;
+  *)
+    die 'supported only on macOS and Linux'
+    ;;
+esac

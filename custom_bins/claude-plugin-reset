@@ -1,0 +1,177 @@
+#!/usr/bin/env bash
+# claude-plugin-reset — Reinstall plugin defaults for Claude Code.
+#
+# Bundles the full plugin reset workflow:
+#   1. Update all plugins from registered marketplaces
+#   2. Install official marketplace plugins
+#   3. Clean stale plugin cache versions
+#   4. Clean duplicate skill symlinks
+#   5. Re-apply context profile (or reset to global defaults)
+#
+# Usage:
+#   claude-plugin-reset            # Full reset, re-apply current context.yaml
+#   claude-plugin-reset --global   # Reset to global defaults (remove per-project config)
+#   claude-plugin-reset --dry-run  # Preview what would happen
+
+set -euo pipefail
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+CYAN='\033[0;36m'
+BOLD='\033[1m'
+NC='\033[0m'
+
+DOT_DIR="${DOT_DIR:-$(cd "$(dirname "$0")/.." && pwd)}"
+GLOBAL_RESET=false
+DRY_RUN=false
+FORCE=false
+
+for arg in "$@"; do
+  case "$arg" in
+    --global)  GLOBAL_RESET=true ;;
+    --force|-f) FORCE=true ;;
+    --dry-run|-n) DRY_RUN=true ;;
+    --help|-h)
+      echo "Usage: $(basename "$0") [--global] [--force] [--dry-run]"
+      echo ""
+      echo "Reinstall plugin defaults for Claude Code."
+      echo ""
+      echo "Options:"
+      echo "  --global    Reset to global defaults (remove per-project plugin config)"
+      echo "  --force     Force --global even when files are git-tracked"
+      echo "  --dry-run   Preview what would happen without making changes"
+      echo "  --help      Show this help"
+      exit 0
+      ;;
+  esac
+done
+
+step=0
+run_step() {
+  step=$((step + 1))
+  echo -e "\n${BOLD}[$step]${NC} $1"
+}
+
+# --- Step 1: Update plugin marketplaces ---
+source "$DOT_DIR/config.sh"
+run_step "Updating plugin marketplaces..."
+
+if ! command -v claude &>/dev/null; then
+  echo -e "  ${RED}claude CLI not found — skipping marketplace update${NC}"
+else
+  for entry in "${PLUGIN_MARKETPLACES[@]}"; do
+    name="${entry%%:*}"
+    src="${entry#*:}"
+
+    if $DRY_RUN; then
+      echo -e "  ${YELLOW}Would ensure marketplace: $name ($src)${NC}"
+      continue
+    fi
+
+    # Register if not already added
+    if ! claude plugin marketplace list 2>/dev/null | grep -q "$name"; then
+      echo -e "  ${CYAN}Adding marketplace: $name from $src...${NC}"
+      if ! claude plugin marketplace add "$src" 2>&1; then
+        echo -e "  ${RED}Failed to add $name — skipping${NC}"
+        continue
+      fi
+    fi
+
+    # Update
+    claude plugin marketplace update "$name" 2>&1 || \
+      echo -e "  ${YELLOW}$name update had warnings (may be OK)${NC}"
+  done
+fi
+
+# --- Step 2: Install official marketplace plugins ---
+run_step "Installing official marketplace plugins..."
+
+if ! command -v claude &>/dev/null; then
+  echo -e "  ${RED}claude CLI not found — skipping${NC}"
+else
+  installed=0 skipped=0 failed=0
+  for plugin in "${OFFICIAL_PLUGINS[@]}"; do
+    qualified="${plugin}@claude-plugins-official"
+    if $DRY_RUN; then
+      echo -e "  ${YELLOW}Would ensure: $qualified${NC}"
+      continue
+    fi
+    # Skip if already installed
+    if claude plugin list 2>/dev/null | grep -q "$qualified"; then
+      skipped=$((skipped + 1))
+      continue
+    fi
+    if claude plugin install "$qualified" --scope user 2>&1; then
+      installed=$((installed + 1))
+    else
+      echo -e "  ${YELLOW}Failed: $qualified${NC}"
+      failed=$((failed + 1))
+    fi
+  done
+  if ! $DRY_RUN; then
+    echo -e "  ${GREEN}Installed: $installed${NC}, Skipped: $skipped, Failed: $failed"
+  fi
+fi
+
+# --- Step 3: Clean stale cache ---
+run_step "Cleaning stale plugin cache..."
+
+if [[ -f "$DOT_DIR/custom_bins/claude-cache-clean" ]]; then
+  if $DRY_RUN; then
+    "$DOT_DIR/custom_bins/claude-cache-clean"
+  else
+    "$DOT_DIR/custom_bins/claude-cache-clean" --apply
+  fi
+else
+  echo -e "  ${YELLOW}claude-cache-clean not found — skipping${NC}"
+fi
+
+# --- Step 4: Clean duplicate skill symlinks ---
+run_step "Cleaning duplicate skill symlinks..."
+
+if [[ -f "$DOT_DIR/scripts/cleanup/clean_plugin_symlinks.sh" ]]; then
+  if $DRY_RUN; then
+    bash "$DOT_DIR/scripts/cleanup/clean_plugin_symlinks.sh" --dry-run
+  else
+    bash "$DOT_DIR/scripts/cleanup/clean_plugin_symlinks.sh"
+  fi
+else
+  echo -e "  ${YELLOW}clean_plugin_symlinks.sh not found — skipping${NC}"
+fi
+
+# --- Step 5: Re-apply context profile ---
+if $GLOBAL_RESET; then
+  run_step "Resetting to global plugin defaults..."
+  if command -v claude-context &>/dev/null; then
+    local force_flag=""
+    $FORCE && force_flag="--force"
+    if $DRY_RUN; then
+      echo -e "  ${YELLOW}Would run: claude-context --clean $force_flag${NC}"
+    else
+      claude-context --clean $force_flag
+    fi
+  else
+    echo -e "  ${YELLOW}claude-context not found — skipping${NC}"
+  fi
+else
+  run_step "Re-applying context profile..."
+  if command -v claude-context &>/dev/null; then
+    if $DRY_RUN; then
+      echo -e "  ${YELLOW}Would re-apply current context.yaml${NC}"
+      claude-context --list
+    else
+      claude-context
+    fi
+  else
+    echo -e "  ${YELLOW}claude-context not found — skipping${NC}"
+  fi
+fi
+
+# --- Done ---
+echo ""
+if $DRY_RUN; then
+  echo -e "${YELLOW}Dry run complete. Run without --dry-run to apply changes.${NC}"
+else
+  echo -e "${GREEN}Plugin reset complete.${NC} Restart Claude Code to apply changes."
+fi

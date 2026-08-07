@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# Output: YYYY-MM-DD in UTC
+date -u +%Y-%m-%d

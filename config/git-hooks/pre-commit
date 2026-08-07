@@ -1,0 +1,202 @@
+#!/bin/bash
+# Global pre-commit hook with layered/additive support for repo-specific hooks
+# Runs global secret detection, then delegates to repo's own hooks if present
+
+set -euo pipefail
+
+# === GLOBAL CHECKS ===
+
+# Check for secrets in staged changes
+if command -v gitleaks &> /dev/null; then
+    # Use gitleaks if available
+    if ! gitleaks protect --staged --no-banner; then
+        echo "Pre-commit: Secrets detected in staged changes. Commit blocked."
+        echo "To bypass (NOT recommended): git commit --no-verify"
+        exit 1
+    fi
+else
+    # Fallback to basic pattern matching
+    STAGED_DIFF=$(git diff --cached --diff-filter=ACMR 2>/dev/null || true)
+
+    if [ -n "$STAGED_DIFF" ]; then
+        # Common secret patterns (kept conservative to avoid false positives)
+        # For comprehensive detection, install gitleaks: brew install gitleaks
+        PATTERNS=(
+            'AKIA[0-9A-Z]{16}'                          # AWS Access Key ID
+            'gh[pousr]_[A-Za-z0-9_]{36,}'               # GitHub tokens
+            'sk-[A-Za-z0-9]{48,}'                       # OpenAI API keys
+            'sk-ant-[A-Za-z0-9_-]{90,}'                 # Anthropic API keys
+            'xox[baprs]-[A-Za-z0-9-]{10,}'              # Slack tokens
+            'ya29\.[A-Za-z0-9_-]{50,}'                  # Google OAuth tokens
+            'AIza[0-9A-Za-z_-]{35}'                     # Google API keys
+            '-----BEGIN (RSA |DSA |EC |OPENSSH )?PRIVATE KEY-----'  # Private keys
+        )
+
+        for pattern in "${PATTERNS[@]}"; do
+            if echo "$STAGED_DIFF" | grep -qE "$pattern"; then
+                echo "Pre-commit: Potential secret detected (pattern: $pattern)"
+                echo "Install gitleaks for more accurate detection: brew install gitleaks"
+                echo "To bypass (NOT recommended): git commit --no-verify"
+                exit 1
+            fi
+        done
+    fi
+fi
+
+# === LOCKFILE CHANGE DETECTION (Supply Chain Defense) ===
+
+STAGED_FILES=$(git diff --cached --name-only 2>/dev/null || true)
+LOCKFILE_CHANGED=""
+
+for pattern in package-lock.json bun.lockb bun.lock pnpm-lock.yaml yarn.lock uv.lock poetry.lock Pipfile.lock; do
+    if echo "$STAGED_FILES" | grep -q "$pattern"; then
+        LOCKFILE_CHANGED="$pattern"
+        break
+    fi
+done
+
+if [ -n "$LOCKFILE_CHANGED" ]; then
+    echo "Pre-commit: Lockfile changed ($LOCKFILE_CHANGED) — checking for supply chain issues..."
+
+    # Socket CLI (JS ecosystem lockfiles)
+    if command -v socket &>/dev/null && echo "$LOCKFILE_CHANGED" | grep -qE '^(package-lock|bun\.lock|pnpm-lock|yarn\.lock)'; then
+        SOCKET_OUT=$(socket report --json 2>/dev/null || true)
+        if echo "$SOCKET_OUT" | jq -e . >/dev/null 2>&1; then
+            if ! echo "$SOCKET_OUT" | jq -e '.issues | length == 0' >/dev/null 2>&1; then
+                echo "Pre-commit: socket found potential issues in $LOCKFILE_CHANGED. Review with: socket report"
+                echo "  To bypass: git commit --no-verify"
+                exit 1
+            fi
+        else
+            # `socket report` doesn't exist in current socket CLI versions (renamed to
+            # `socket scan create`), and/or socket isn't authenticated — either way the
+            # output isn't valid JSON, so there's no real finding to act on. Don't treat
+            # a broken/unauthenticated tool invocation as "issues found".
+            echo "Pre-commit: socket CLI did not return valid JSON for $LOCKFILE_CHANGED (unauthenticated, or 'socket report' no longer exists in this CLI version) — skipping supply-chain check. Run 'socket login', or update this hook to use 'socket scan create'."
+        fi
+    fi
+
+    # pip-audit (Python lockfiles)
+    if command -v pip-audit &>/dev/null && echo "$LOCKFILE_CHANGED" | grep -qE '^(uv\.lock|poetry\.lock|Pipfile\.lock)'; then
+        if ! pip-audit 2>/dev/null; then
+            echo "Pre-commit: pip-audit found vulnerabilities. Review above."
+            echo "  To bypass: git commit --no-verify"
+            exit 1
+        fi
+    fi
+fi
+
+# === CLAUDE CODE SETTINGS INTEGRITY CHECK ===
+#
+# Blocks commits that would replace a substantial claude/settings.json with a
+# degraded stub. The file is dual-written (Claude Code + manual edits), and stash
+# operations can silently capture a stripped-down working-tree version.
+#
+# Validation: if the file existed in HEAD with >50 lines, the staged version must
+# contain the three structural keys (statusLine, hooks, permissions). These are
+# hand-crafted and not auto-regenerated — their absence means accidental wipe.
+
+_validate_claude_settings() {
+    local file="$1"
+
+    # Only validate if HEAD had a substantial settings.json
+    local prev_lines
+    prev_lines=$(git show "HEAD:${file}" 2>/dev/null | wc -l || echo 0)
+    [ "${prev_lines}" -lt 50 ] && return 0  # New file or was already minimal
+
+    local staged_content
+    staged_content=$(git show ":${file}" 2>/dev/null) || return 0
+
+    local staged_lines
+    staged_lines=$(echo "${staged_content}" | wc -l)
+
+    # Run JSON key validation
+    # Per-project .claude/settings.json may only have enabledPlugins + hooks.
+    # Global ~/.claude/settings.json should have statusLine, hooks, permissions.
+    # Detect context: if file is in a repo (not ~/.claude/), use relaxed check.
+    local is_global=false
+    local repo_root
+    repo_root=$(git rev-parse --show-toplevel 2>/dev/null || echo "")
+    if [ -n "$repo_root" ] && [[ "$repo_root" == "$HOME" ]]; then
+        is_global=true
+    fi
+
+    local missing
+    missing=$(echo "${staged_content}" | IS_GLOBAL="${is_global}" python3 -c "
+import json, sys, os
+try:
+    d = json.load(sys.stdin)
+except json.JSONDecodeError as e:
+    print(f'invalid-json ({e})')
+    sys.exit(1)
+is_global = os.environ.get('IS_GLOBAL', 'false') == 'true'
+if is_global:
+    required = ['statusLine', 'hooks', 'permissions']
+else:
+    # Per-project: just needs to be valid JSON with at least one known key
+    required = []
+    known_keys = {'enabledPlugins', 'hooks', 'permissions', 'statusLine'}
+    if not any(k in d for k in known_keys):
+        print('no-known-keys')
+        sys.exit(1)
+missing = [k for k in required if k not in d]
+if missing:
+    print(' '.join(missing))
+    sys.exit(1)
+" 2>&1) || {
+        echo ""
+        echo "⛔  Pre-commit: claude/settings.json integrity check FAILED"
+        echo "    Missing required keys: ${missing}"
+        echo "    HEAD version: ${prev_lines} lines  →  staged: ${staged_lines} lines"
+        echo "    This looks like a degraded stub captured by a stash or auto-write."
+        echo ""
+        echo "    Restore and re-stage:"
+        echo "      git restore --staged ${file}"
+        echo "      git show HEAD:${file} > ${file}"
+        echo "      git add ${file}"
+        echo ""
+        echo "    To bypass (only if you intentionally want a minimal settings.json):"
+        echo "      git commit --no-verify"
+        echo ""
+        return 1
+    }
+
+    return 0
+}
+
+while IFS= read -r _staged_file; do
+    case "${_staged_file}" in
+        claude/settings.json|.claude/settings.json)
+            _validate_claude_settings "${_staged_file}" || exit 1
+            ;;
+    esac
+done < <(git diff --cached --name-only 2>/dev/null)
+
+# === REPO-SPECIFIC HOOKS (Additive) ===
+
+REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || echo "")
+
+if [ -n "$REPO_ROOT" ]; then
+    # Check for pre-commit framework config
+    if [ -f "$REPO_ROOT/.pre-commit-config.yaml" ] && command -v pre-commit &> /dev/null; then
+        echo "Running repo's pre-commit framework hooks..."
+        pre-commit run --hook-stage commit || exit $?
+    fi
+
+    # Check for renamed local hook (for repos with manual hooks)
+    LOCAL_HOOK="$REPO_ROOT/.git/hooks/pre-commit.local"
+    if [ -x "$LOCAL_HOOK" ]; then
+        echo "Running repo's local pre-commit hook..."
+        "$LOCAL_HOOK" || exit $?
+    fi
+
+    # Check for husky (JS projects)
+    HUSKY_HOOK="$REPO_ROOT/.husky/pre-commit"
+    if [ -x "$HUSKY_HOOK" ]; then
+        echo "Running repo's husky pre-commit hook..."
+        # Run husky from repo root (some hooks assume this)
+        (cd "$REPO_ROOT" && "$HUSKY_HOOK") || exit $?
+    fi
+fi
+
+exit 0

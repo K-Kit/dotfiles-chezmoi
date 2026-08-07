@@ -1,0 +1,40 @@
+---
+name: commit
+description: Commit currently staged/unstaged changes with a formatted message. Use when the user says "commit this", "commit these changes", or "save my work" — for combined commit+push+sync, use commit-push-sync instead.
+---
+
+# Commit current work
+
+## Instructions
+
+1. **Check Status**: Run the following commands to understand the current state:
+   - `git status --short`
+   - `git diff --stat`
+   - `git log --oneline -3`
+
+2. **Analyze Changes**:
+   - Review the output to understand what has changed.
+   - If `git diff` doesn't provide enough info (e.g., new files), read the files or use your working memory.
+   - Determine if the work should be split into multiple logical commits.
+
+3. **Stage Changes**:
+   - New/modified files: `git add <file1> <file2> ...`
+   - Deleted files: `git add -u <path>` (plain `git add` fails on paths no longer on disk)
+   - Mixed (new + deleted): combine both commands, or use `git add -u` for deletions then `git add` for new files
+
+4. **Commit**:
+   - For each logical change, write a commit message in the following format:
+     - Short title description (< 80 characters)
+     - 2~3 bullet points (< 80 characters) with a quick description
+   - For single-line messages: `git commit -m "subject line"`
+   - For multi-line messages (sandbox-safe, NEVER use heredoc):
+     ```bash
+     mkdir -p "$TMPDIR" && printf '%s\n' "subject line" "" "- bullet 1" "- bullet 2" > "$TMPDIR/commit_msg.txt" && git commit -F "$TMPDIR/commit_msg.txt"
+     ```
+
+## Important Notes
+- Prepend `GIT_EDITOR=true` to all git commands you run, especially the ones looking at diffs, to avoid blocking.
+- If you're at the start of the session, use subagents to summarize changes made by others if needed.
+- Only commit work when instructed or when a task is complete.
+
+Optional: Ask me if I would like to push the commit.

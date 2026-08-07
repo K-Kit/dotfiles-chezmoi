@@ -1,0 +1,437 @@
+#!/usr/bin/env zsh
+# Clear Mac Apps - Manage running apps with configurable behavior
+# Used by macOS Shortcuts via "Run Shell Script" action
+#
+# Config file supports four sections:
+#   [no-touch]           - Apps to leave completely alone
+#   [close-windows]      - Apps where we close windows but don't quit
+#   [slow-quit]          - Apps that ignore keystrokes; quit then poll for exit
+#   [protected-windows]  - Tab title patterns: close non-matching windows, keep app alive
+
+set -euo pipefail
+
+SCRIPT_DIR="${0:A:h}"
+CONFIG_FILE="${SCRIPT_DIR}/../config/clear_mac_apps.conf"
+REGISTRY_FILE="${SCRIPT_DIR}/../config/safari_web_apps.local"
+DRY_RUN=false
+
+# Parse flags
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --dry-run|-n)
+            DRY_RUN=true
+            shift
+            ;;
+        --help|-h)
+            echo "Usage: clear-mac-apps [--dry-run|-n]"
+            echo "  --dry-run, -n  Show what would happen without making changes"
+            exit 0
+            ;;
+        *)
+            echo "Unknown option: $1" >&2
+            exit 1
+            ;;
+    esac
+done
+
+# Parse apps from a specific section in config
+# Usage: get_entries_in_section "no-touch"
+get_entries_in_section() {
+    local section="$1"
+    if [[ ! -f "$CONFIG_FILE" ]]; then
+        echo "Error: Config file not found: $CONFIG_FILE" >&2
+        exit 1
+    fi
+    awk -v section="[$section]" '
+        /^\[.*\]$/ { in_section = ($0 == section); next }
+        in_section && !/^#/ && !/^[[:space:]]*$/ {
+            sub(/#.*/, "")
+            gsub(/^[[:space:]]+|[[:space:]]+$/, "")
+            if (length > 0) print
+        }
+    ' "$CONFIG_FILE"
+}
+
+# Get list of running GUI apps as "name|bundle_id" per line
+get_running_apps() {
+    osascript -e 'tell application "System Events"
+        set procList to every process whose background only is false
+        set output to ""
+        repeat with proc in procList
+            set procName to name of proc
+            set procBID to bundle identifier of proc
+            if procBID is missing value then set procBID to ""
+            set output to output & procName & "|" & procBID & linefeed
+        end repeat
+        return output
+    end tell'
+}
+
+# Quit an app gracefully
+quit_app() {
+    local app="$1"
+    osascript -e "tell application \"$app\" to quit" 2>/dev/null || true
+}
+
+# Quit an app and poll until it exits (max 30s), for apps that ignore keystrokes.
+# No focus dependency (System Events polling is name-based), safe to run in parallel.
+# Usage: slow_quit_and_wait "AppName"
+slow_quit_and_wait() {
+    local app="$1"
+    echo "Quitting (slow): $app"
+    quit_app "$app"
+    local elapsed=0
+    while (( elapsed < 30 )); do
+        sleep 2
+        elapsed=$((elapsed + 2))
+        local still_running
+        still_running=$(osascript -e "tell application \"System Events\" to return (name of every process whose name is \"$app\")" 2>/dev/null || echo "")
+        if [[ -z "$still_running" ]]; then
+            echo "  $app exited after ${elapsed}s"
+            return 0
+        fi
+    done
+    echo "  Warning: $app still running after 30s, moving on"
+}
+
+# Close all windows of an app without quitting
+# Usage: close_app_windows "AppName" [patience]
+#   patience: number of no-progress attempts before escalating/giving up (default: 3)
+close_app_windows() {
+    local app="$1"
+    local patience="${2:-3}"
+    # Use Cmd+W via System Events - works for Electron apps and others
+    # that don't respond to standard AppleScript window commands.
+    #
+    # Tabbed apps (Obsidian, Bear) keep all tabs in a single window, so Cmd+W
+    # only closes a tab and the window count never drops. When Cmd+W stalls
+    # (no progress after `patience` attempts), escalate to Cmd+Shift+W, which
+    # closes the whole window at once. If that also stalls, give up.
+    # Overall bound: max 20 attempts.
+    osascript -e "
+        tell application \"System Events\"
+            tell process \"$app\"
+                set frontmost to true
+                set maxAttempts to 20
+                set attempts to 0
+                set lastCount to count of windows
+                set stuckCount to 0
+                set maxStuck to $patience
+                set giveUp to $patience * 2
+                repeat while (count of windows) > 0 and attempts < maxAttempts
+                    if stuckCount >= maxStuck then
+                        -- Cmd+W stalled (tabbed app): escalate to close-window
+                        keystroke \"w\" using {command down, shift down}
+                    else
+                        keystroke \"w\" using command down
+                    end if
+                    delay 0.2
+                    set attempts to attempts + 1
+                    set currentCount to count of windows
+                    if currentCount >= lastCount then
+                        set stuckCount to stuckCount + 1
+                        if stuckCount >= giveUp then
+                            -- No progress even after escalating, app is stuck
+                            exit repeat
+                        end if
+                    else
+                        set stuckCount to 0
+                    end if
+                    set lastCount to currentCount
+                end repeat
+            end tell
+        end tell
+    " 2>/dev/null || true
+}
+
+# Get the title of a (non-Chrome) app's frontmost window, best-effort
+get_app_frontmost_window_title() {
+    local app="$1"
+    osascript -e "tell application \"System Events\" to tell process \"$app\" to get name of window 1" 2>/dev/null
+}
+
+# Get all Chrome window IDs and tab titles as "window_id|tab_title" per line
+get_chrome_window_tabs() {
+    osascript <<'APPLESCRIPT'
+tell application "Google Chrome"
+    set output to ""
+    repeat with w in every window
+        repeat with t in every tab of w
+            set output to output & (id of w) & "|" & (title of t) & linefeed
+        end repeat
+    end repeat
+    return output
+end tell
+APPLESCRIPT
+}
+
+# Selectively close non-protected windows of an app
+# Usage: close_app_selectively "Google Chrome" "Google Meet" "pattern2" ...
+close_app_selectively() {
+    local app="$1"; shift
+    local -a protected_patterns=("$@")
+
+    if [[ "$app" != "Google Chrome" ]]; then
+        # Non-Chrome: we can't selectively close individual windows, only
+        # detect whether ANY window matches a protected pattern (see caller).
+        # Being routed here means a match was found, so leave the app alone
+        # entirely rather than closing everything and defeating the protection.
+        echo "  $app has a protected window — leaving it alone"
+        return
+    fi
+
+    # Pass 1: fetch window/tab data, filter in zsh
+    local -A protected_windows all_windows
+    while IFS='|' read -r wid title; do
+        [[ -z "$wid" ]] && continue
+        all_windows[$wid]=1
+        for pattern in "${protected_patterns[@]}"; do
+            if [[ "${(L)title}" == *"${(L)pattern}"* ]]; then
+                protected_windows[$wid]=1
+                break
+            fi
+        done
+    done < <(get_chrome_window_tabs)
+
+    # Collect IDs to close
+    local -a ids_to_close=()
+    for wid in ${(k)all_windows}; do
+        (( ${+protected_windows[$wid]} )) || ids_to_close+=("$wid")
+    done
+
+    # All windows protected → nothing to do
+    (( ${#ids_to_close} == 0 )) && return 0
+
+    # No protected windows → quit entirely
+    if (( ${#protected_windows} == 0 )); then
+        quit_app "$app"
+        return
+    fi
+
+    # Pass 2: close non-protected windows by ID
+    local script='tell application "Google Chrome"'$'\n'
+    for wid in "${ids_to_close[@]}"; do
+        script+="    close (every window whose id is ${wid})"$'\n'
+    done
+    script+='end tell'
+    osascript -e "$script" 2>/dev/null || true
+
+    # Zombie check: if 0 windows remain after close, quit the app
+    local remaining
+    remaining=$(osascript -e 'tell application "Google Chrome" to return count of windows' 2>/dev/null || echo "")
+    if [[ "$remaining" == "0" ]]; then
+        quit_app "$app"
+    fi
+    return 0
+}
+
+# Self-heal the Safari web app registry: regenerate if missing or >24h stale.
+# Keeps bundle-ID matching correct on fresh machines and after new web apps
+# are added, without depending on deploy.sh timing.
+refresh_registry_if_stale() {
+    local scanner="${SCRIPT_DIR}/safari-web-apps-scan"
+    [[ -x "$scanner" ]] || return 0
+
+    local stale=false
+    if [[ ! -f "$REGISTRY_FILE" ]]; then
+        stale=true
+    else
+        local age=$(( $(date +%s) - $(stat -f %m "$REGISTRY_FILE" 2>/dev/null || echo 0) ))
+        (( age > 86400 )) && stale=true
+    fi
+
+    [[ "$stale" == true ]] && "$scanner" >/dev/null 2>&1
+    return 0
+}
+
+main() {
+    refresh_registry_if_stale
+
+    # Load Safari web app registry for bundle ID fallback matching
+    typeset -A registry  # registry[lowercase_name] = bundle_id
+    if [[ -f "$REGISTRY_FILE" ]]; then
+        while IFS='|' read -r name bid _path; do
+            [[ "$name" == \#* || -z "$name" ]] && continue
+            registry[${(L)name}]="$bid"
+        done < "$REGISTRY_FILE"
+    fi
+
+    # Build associative arrays for O(1) lookup (keys are lowercase)
+    typeset -A no_touch_set
+    typeset -A close_windows_set
+    typeset -A slow_quit_set
+
+    while IFS= read -r app; do
+        [[ -n "$app" ]] && no_touch_set[${(L)app}]=1
+    done < <(get_entries_in_section "no-touch")
+
+    while IFS= read -r app; do
+        [[ -n "$app" ]] && close_windows_set[${(L)app}]=1
+    done < <(get_entries_in_section "close-windows")
+
+    while IFS= read -r app; do
+        [[ -n "$app" ]] && slow_quit_set[${(L)app}]=1
+    done < <(get_entries_in_section "slow-quit")
+
+    # Load protected-window patterns
+    local -a protected_patterns=()
+    while IFS= read -r pattern; do
+        [[ -n "$pattern" ]] && protected_patterns+=("$pattern")
+    done < <(get_entries_in_section "protected-windows")
+
+    # Build bundle ID sets for fallback matching (from registry)
+    typeset -A no_touch_bids
+    typeset -A close_windows_bids
+    typeset -A slow_quit_bids
+
+    for name in ${(k)no_touch_set}; do
+        [[ -n "${registry[$name]:-}" ]] && no_touch_bids[${registry[$name]}]=1
+    done
+    for name in ${(k)close_windows_set}; do
+        [[ -n "${registry[$name]:-}" ]] && close_windows_bids[${registry[$name]}]=1
+    done
+    for name in ${(k)slow_quit_set}; do
+        [[ -n "${registry[$name]:-}" ]] && slow_quit_bids[${registry[$name]}]=1
+    done
+
+    # Get running apps with bundle IDs (tab-separated: "name<TAB>bid")
+    # Tab-separated to handle multiple processes with the same name (e.g. Safari web apps)
+    local SEP=$'\t'
+    local -a running_entries=()
+    while IFS='|' read -r name bid; do
+        [[ -n "$name" ]] || continue
+        running_entries+=("${name}${SEP}${bid}")
+    done < <(get_running_apps)
+
+    # Classify: check name match first, bundle ID as fallback
+    local -a apps_to_quit=()
+    local -a apps_close_windows=()
+    local -a apps_slow_quit=()
+    local -a apps_selective_close=()
+    local -a apps_skipped=()
+
+    for entry in "${running_entries[@]}"; do
+        local app="${entry%%${SEP}*}"
+        local bid="${entry#*${SEP}}"
+        local app_lower="${(L)app}"
+
+        if (( ${+no_touch_set[$app_lower]} )) || { [[ -n "$bid" ]] && (( ${+no_touch_bids[$bid]} )) }; then
+            apps_skipped+=("$app")
+        elif (( ${+slow_quit_set[$app_lower]} )) || { [[ -n "$bid" ]] && (( ${+slow_quit_bids[$bid]} )) }; then
+            apps_slow_quit+=("$app")
+        elif (( ${+close_windows_set[$app_lower]} )) || { [[ -n "$bid" ]] && (( ${+close_windows_bids[$bid]} )) }; then
+            apps_close_windows+=("$app")
+        elif (( ${#protected_patterns} > 0 )); then
+            # Check if this app has any protected windows
+            local has_protected=false
+            if [[ "$app" == "Google Chrome" ]]; then
+                # Chrome: check all tab titles (only fetch once, cache result)
+                if [[ -z "${_chrome_tabs_fetched:-}" ]]; then
+                    _chrome_tabs_cache=$(get_chrome_window_tabs)
+                    _chrome_tabs_fetched=1
+                fi
+                while IFS='|' read -r _wid _title; do
+                    [[ -z "$_wid" ]] && continue
+                    for pattern in "${protected_patterns[@]}"; do
+                        if [[ "${(L)_title}" == *"${(L)pattern}"* ]]; then
+                            has_protected=true
+                            break 2
+                        fi
+                    done
+                done <<< "$_chrome_tabs_cache"
+            else
+                # Other apps: active window title only (best-effort)
+                local _title
+                _title=$(get_app_frontmost_window_title "$app")
+                if [[ -n "$_title" ]]; then
+                    for pattern in "${protected_patterns[@]}"; do
+                        if [[ "${(L)_title}" == *"${(L)pattern}"* ]]; then
+                            has_protected=true
+                            break
+                        fi
+                    done
+                fi
+            fi
+            if $has_protected; then
+                apps_selective_close+=("$app")
+            else
+                apps_to_quit+=("$app")
+            fi
+        else
+            apps_to_quit+=("$app")
+        fi
+    done
+
+    # Dry-run mode: just show what would happen
+    if $DRY_RUN; then
+        echo "=== DRY RUN ==="
+        echo ""
+        echo "Would QUIT (${#apps_to_quit}):"
+        for app in "${apps_to_quit[@]}"; do
+            echo "  - $app"
+        done
+        echo ""
+        echo "Would CLOSE WINDOWS (${#apps_close_windows}):"
+        for app in "${apps_close_windows[@]}"; do
+            echo "  - $app"
+        done
+        echo ""
+        echo "Would SLOW-QUIT (${#apps_slow_quit}):"
+        for app in "${apps_slow_quit[@]}"; do
+            echo "  - $app"
+        done
+        echo ""
+        if (( ${#apps_selective_close} > 0 )); then
+            local patterns_display="${(j:, :)${(@qq)protected_patterns}}"
+            echo "Would SELECTIVE-CLOSE (matching: ${patterns_display}):"
+            for app in "${apps_selective_close[@]}"; do
+                echo "  - $app"
+            done
+            echo ""
+        fi
+        echo "Would SKIP (no-touch):"
+        for app in "${apps_skipped[@]}"; do
+            echo "  - $app"
+        done
+        return 0
+    fi
+
+    # Quit apps in parallel (don't need focus)
+    if (( ${#apps_to_quit} > 0 )); then
+        echo "Quitting ${#apps_to_quit} apps in parallel..."
+        for app in "${apps_to_quit[@]}"; do
+            quit_app "$app" &
+        done
+        wait
+    fi
+
+    # Close windows sequentially (need focus for Cmd+W)
+    for app in "${apps_close_windows[@]}"; do
+        echo "Closing windows: $app"
+        close_app_windows "$app" 3
+    done
+
+    # Slow-quit apps in parallel: send quit, then poll each until exit (max 30s each).
+    # No focus needed (System Events polling is name-based), so safe to background.
+    if (( ${#apps_slow_quit} > 0 )); then
+        echo "Quitting (slow) ${#apps_slow_quit} apps in parallel..."
+        for app in "${apps_slow_quit[@]}"; do
+            slow_quit_and_wait "$app" &
+        done
+        wait
+    fi
+
+    # Selective-close: close non-protected windows, keep app alive
+    for app in "${apps_selective_close[@]}"; do
+        echo "Selective-close: $app"
+        close_app_selectively "$app" "${protected_patterns[@]}"
+    done
+
+    echo ""
+    echo "Done."
+    (( ${#no_touch_set} > 0 )) && echo "  No-touch: ${(k)no_touch_set}"
+    (( ${#close_windows_set} > 0 )) && echo "  Close-windows: ${(k)close_windows_set}"
+    (( ${#slow_quit_set} > 0 )) && echo "  Slow-quit: ${(k)slow_quit_set}"
+}
+
+main "$@"

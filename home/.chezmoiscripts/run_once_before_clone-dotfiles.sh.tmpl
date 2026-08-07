@@ -1,17 +1,15 @@
 #!/usr/bin/env bash
-# chezmoi: run_once — ensure the dotfiles-ai content repo exists before apply
+# chezmoi: run_once — verify content is present in this single-repo checkout
 set -euo pipefail
 
 DOT_DIR="{{ .dot_dir }}"
-REPO="{{ .dotfiles_repo }}"
-BRANCH="{{ .dotfiles_branch }}"
 
 if [[ -d "$DOT_DIR/config" ]]; then
-  echo "  ✓ dotfiles content repo present at $DOT_DIR"
+  echo "  ✓ dotfiles content present at $DOT_DIR"
   exit 0
 fi
 
-echo "  Cloning dotfiles content repo → $DOT_DIR"
-mkdir -p "$(dirname "$DOT_DIR")"
-git clone --branch "$BRANCH" "$REPO" "$DOT_DIR"
-echo "  ✓ cloned $REPO @ $BRANCH"
+echo "  ✗ Expected config/ under $DOT_DIR (chezmoi working tree)." >&2
+echo "    Clone https://github.com/K-Kit/dotfiles-chezmoi and apply with:" >&2
+echo "      CHEZMOI_PROFILE=personal chezmoi --source <clone> apply" >&2
+exit 1

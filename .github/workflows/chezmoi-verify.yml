@@ -4,14 +4,16 @@ on:
     paths:
       - "home/**"
       - ".chezmoiroot"
-      - ".chezmoi.toml.tmpl"
+      - "scripts/lib.sh"
       - "scripts/chezmoi/**"
+      - "config.sh"
   pull_request:
     paths:
       - "home/**"
       - ".chezmoiroot"
-      - ".chezmoi.toml.tmpl"
+      - "scripts/lib.sh"
       - "scripts/chezmoi/**"
+      - "config.sh"
 
 jobs:
   verify:
@@ -22,29 +24,25 @@ jobs:
         run: sh -c "$(curl -fsSL get.chezmoi.io)" -- -b "$HOME/bin"
       - name: Add chezmoi to PATH
         run: echo "$HOME/bin" >> "$GITHUB_PATH"
-      - name: Managed files (cloud profile)
+      - name: Init + managed files (cloud profile)
         env:
           CHEZMOI_PROFILE: cloud
           CHEZMOI_NON_INTERACTIVE: "1"
         run: |
-          cat > /tmp/chezmoi.toml <<'EOF'
-          [data]
-              profile = "cloud"
-              nonInteractive = true
-          EOF
-          chezmoi --source "$GITHUB_WORKSPACE" --destination /tmp/chezmoi-dest \
-            --config /tmp/chezmoi.toml managed
+          # Point source at this checkout (monorepo = content + home/)
+          mkdir -p "$HOME/.local/share"
+          ln -sfn "$GITHUB_WORKSPACE" "$HOME/.local/share/chezmoi"
+          chezmoi init --force
+          chezmoi managed | tee /tmp/managed.txt
+          test "$(wc -l < /tmp/managed.txt)" -gt 5
+          grep -q 'dot_dir' "$HOME/.config/chezmoi/chezmoi.toml"
+          grep -F "$GITHUB_WORKSPACE" "$HOME/.config/chezmoi/chezmoi.toml"
       - name: Template dry-run (no apply scripts)
         env:
           CHEZMOI_PROFILE: cloud
           CHEZMOI_NON_INTERACTIVE: "1"
         run: |
-          cat > /tmp/chezmoi.toml <<'EOF'
-          [data]
-              profile = "cloud"
-              nonInteractive = true
-          EOF
-          # Verify templates render without applying (diff against empty dest)
           mkdir -p /tmp/chezmoi-dest
-          chezmoi --source "$GITHUB_WORKSPACE" --destination /tmp/chezmoi-dest \
-            --config /tmp/chezmoi.toml diff --no-pager || true
+          chezmoi --destination /tmp/chezmoi-dest apply --exclude scripts
+          test -f /tmp/chezmoi-dest/.zshrc
+          grep -F "$GITHUB_WORKSPACE" /tmp/chezmoi-dest/.zshrc
