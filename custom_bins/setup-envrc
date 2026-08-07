@@ -156,12 +156,14 @@ get_value_from_content() {
 
 list_sensitive_keys() {
     load_secrets_cache
-    local keys
+    local keys backend
     keys=$(printf '%s\n' "${SECRETS_CACHE:-}" \
         | sed -n 's/^[[:space:]]*\([A-Za-z_][A-Za-z0-9_-]*\)=.*/\1/p')
-    if [[ "$(dotfiles_secrets_backend)" != "bws" ]]; then
-        keys=$(printf '%s\n' "$keys" | grep -iE "$KEY_PATTERN")
-    fi
+    backend=$(dotfiles_secrets_backend)
+    case "$backend" in
+        bws|file|fnox) ;;
+        *) keys=$(printf '%s\n' "$keys" | grep -iE "$KEY_PATTERN") ;;
+    esac
     printf '%s\n' "$keys" | sort -u || true
 }
 
@@ -447,9 +449,15 @@ write_envrc() {
         # Watch backend token file so direnv detects when BWS becomes available
         local _paths_output
         _paths_output=$("$helper_bin" paths 2>/dev/null)
-        local _bws_token
-        _bws_token=$(printf '%s\n' "$_paths_output" | sed -n 's/^BWS_TOKEN_FILE=//p')
-        [[ -n "$_bws_token" ]] && printf 'watch_file %q\n' "$_bws_token"
+        local _watch_path
+        for _watch_path in \
+            "$(printf '%s\n' "$_paths_output" | sed -n 's/^BWS_TOKEN_FILE=//p')" \
+            "$(printf '%s\n' "$_paths_output" | sed -n 's/^SECRETS_ENC_FILE=//p')" \
+            "$(printf '%s\n' "$_paths_output" | sed -n 's/^AGE_IDENTITY_FILE=//p')" \
+            "$(printf '%s\n' "$_paths_output" | sed -n 's/^FNOX_CONFIG=//p')"
+        do
+            [[ -n "$_watch_path" ]] && printf 'watch_file %q\n' "$_watch_path"
+        done
         # Pin backend override if explicitly set at generation time
         if [[ -n "${DOTFILES_SECRETS_BACKEND:-}" ]]; then
             printf 'export DOTFILES_SECRETS_BACKEND=%q\n' "$DOTFILES_SECRETS_BACKEND"

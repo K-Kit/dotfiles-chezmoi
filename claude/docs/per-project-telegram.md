@@ -108,7 +108,7 @@ Choosing "install for this repo only" still writes config to `~/.claude/channels
 
 | What | Where |
 |------|-------|
-| Canonical project token | `dotfiles-secrets/secrets.env.enc` |
+| Canonical project token | `dotfiles-secrets` store (`secrets.env.enc`, `fnox.toml`, or BWS) |
 | Runtime plugin token file | `.claude/channels/telegram/.env` |
 | Project access | `.claude/channels/telegram/access.json` |
 | Global token (fallback) | `~/.claude/channels/telegram/.env` |
