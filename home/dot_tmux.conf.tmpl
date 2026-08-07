@@ -1,0 +1,6 @@
+{{/* tmux.conf entrypoint */ -}}
+{{- $cfg := index . .profile -}}
+{{- if $cfg.deploy.tmux -}}
+# Managed by chezmoi — sources live config from the dotfiles repo.
+source {{ .dot_dir }}/config/tmux.conf
+{{- end }}

@@ -1,0 +1,24 @@
+#!/usr/bin/env zsh
+# chezmoi: run_onchange — OpenCode config
+{{ $cfg := index . .profile -}}
+{{ if $cfg.deploy.opencode -}}
+set -euo pipefail
+export DOT_DIR="{{ .dot_dir }}"
+export CHEZMOI_PROFILE="{{ .profile }}"
+CHEZMOI_ROOT="{{ .chezmoi.workingTree }}"
+source "$CHEZMOI_ROOT/scripts/lib.sh"
+
+# Mirror deploy.sh opencode block if present; otherwise soft-link config
+OPENCODE_SRC="$DOT_DIR/config/opencode"
+OPENCODE_DST="${XDG_CONFIG_HOME:-$HOME/.config}/opencode"
+if [[ -d "$OPENCODE_SRC" ]]; then
+  mkdir -p "$OPENCODE_DST"
+  for f in "$OPENCODE_SRC"/*(N); do
+    [[ -e "$f" ]] || continue
+    ln -sf "$f" "$OPENCODE_DST/$(basename "$f")"
+  done
+  ok "OpenCode config → $OPENCODE_DST"
+else
+  warn "OpenCode config not found at $OPENCODE_SRC"
+fi
+{{ end -}}

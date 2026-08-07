@@ -1,0 +1,90 @@
+# Runtime / local secrets — never manage with chezmoi
+**/.DS_Store
+**/user.conf
+**/machines.conf
+
+# Profile + platform gates (target paths, relative to $HOME)
+{{- $cfg := index . .profile }}
+
+{{- if not $cfg.deploy.vim }}
+.vimrc
+{{- end }}
+
+{{- if not $cfg.deploy.tmux }}
+.tmux.conf
+{{- end }}
+
+{{- if not $cfg.deploy.shell }}
+.zshrc
+.bashrc
+{{- end }}
+
+{{- if not $cfg.deploy.pdb }}
+.pdbrc.py
+{{- end }}
+
+{{- if not $cfg.deploy.pkg_configs }}
+.npmrc
+.bunfig.toml
+.config/uv/**
+.config/pnpm/**
+Library/Preferences/pnpm/**
+{{- end }}
+
+{{- if not $cfg.deploy.htop }}
+.config/htop/**
+{{- end }}
+
+{{- if not $cfg.deploy.gitui }}
+.config/gitui/**
+{{- end }}
+
+{{- if not $cfg.deploy.zed }}
+.config/zed/**
+{{- end }}
+
+{{- if or (not $cfg.deploy.ghostty) (ne .chezmoi.os "darwin") }}
+Library/Application Support/com.mitchellh.ghostty/**
+{{- end }}
+
+{{- if or (not $cfg.deploy.ghostty) (eq .chezmoi.os "darwin") }}
+.config/ghostty/**
+{{- end }}
+
+{{- /* pnpm: macOS uses Library/Preferences/pnpm; Linux uses .config/pnpm */ -}}
+{{- if eq .chezmoi.os "darwin" }}
+.config/pnpm/**
+{{- else }}
+Library/Preferences/pnpm/**
+{{- end }}
+
+{{- if not $cfg.deploy.serena }}
+.serena/**
+{{- end }}
+
+{{- if not $cfg.deploy.claude }}
+.claude
+{{- end }}
+
+{{- if not $cfg.deploy.codex }}
+.codex
+{{- end }}
+
+{{- if or (not $cfg.deploy.finicky) (ne .chezmoi.os "darwin") }}
+.finicky.js
+{{- end }}
+
+{{- if not $cfg.deploy.editor }}
+.editorconfig
+.curlrc
+.inputrc
+.hushlogin
+{{- end }}
+
+{{- if not $cfg.deploy.git_config }}
+.gitattributes
+{{- end }}
+
+{{- if not $cfg.deploy.matplotlib }}
+.config/matplotlib/**
+{{- end }}

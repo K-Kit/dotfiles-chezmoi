@@ -1,0 +1,32 @@
+#!/usr/bin/env zsh
+# chezmoi: run_onchange — matplotlib styles + plotting lib copy
+{{ $cfg := index . .profile -}}
+{{ if $cfg.deploy.matplotlib -}}
+set -euo pipefail
+export DOT_DIR="{{ .dot_dir }}"
+export CHEZMOI_PROFILE="{{ .profile }}"
+CHEZMOI_ROOT="{{ .chezmoi.workingTree }}"
+source "$CHEZMOI_ROOT/scripts/lib.sh"
+
+log "Deploying plotting library..."
+PLOT_SRC="$DOT_DIR/lib/plotting"
+PLOT_DST="$HOME/.local/lib/plotting"
+STYLE_SRC="$DOT_DIR/config/matplotlib"
+STYLE_DST="${XDG_CONFIG_HOME:-$HOME/.config}/matplotlib/stylelib"
+
+if [[ -d "$PLOT_SRC" ]]; then
+  mkdir -p "$(dirname "$PLOT_DST")"
+  rm -rf "$PLOT_DST"
+  cp -a "$PLOT_SRC" "$PLOT_DST"
+  ok "Copied plotting modules → $PLOT_DST"
+fi
+
+if [[ -d "$STYLE_SRC" ]]; then
+  mkdir -p "$STYLE_DST"
+  for f in "$STYLE_SRC"/*.mplstyle(N); do
+    [[ -f "$f" ]] || continue
+    ln -sf "$f" "$STYLE_DST/$(basename "$f")"
+  done
+  ok "Symlinked matplotlib styles → $STYLE_DST"
+fi
+{{ end -}}

@@ -1,0 +1,14 @@
+#!/usr/bin/env zsh
+# chezmoi: run_onchange — VSCode/Cursor/Antigravity settings merge + editorconfig already via files
+{{ $cfg := index . .profile -}}
+{{ if $cfg.deploy.editor -}}
+set -euo pipefail
+export DOT_DIR="{{ .dot_dir }}"
+export CHEZMOI_PROFILE="{{ .profile }}"
+CHEZMOI_ROOT="{{ .chezmoi.workingTree }}"
+source "$CHEZMOI_ROOT/scripts/lib.sh"
+
+log_section "DEPLOYING EDITOR SETTINGS (chezmoi)"
+deploy_editor_settings || warn "Editor settings deployment failed"
+ok "editor settings merged"
+{{ end -}}

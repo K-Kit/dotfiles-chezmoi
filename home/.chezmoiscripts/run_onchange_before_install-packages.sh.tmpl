@@ -1,0 +1,22 @@
+#!/usr/bin/env zsh
+# chezmoi: run_onchange — package/tool installs (delegates to install.sh body)
+# Re-runs when this rendered script changes (profile / workingTree / stamp).
+# stamp: {{ .dot_dir }}/install.sh profile={{ .profile }}
+{{ $cfg := index . .profile -}}
+{{ if or $cfg.install.core $cfg.install.zsh $cfg.install.tmux $cfg.install.ai_tools $cfg.install.extras -}}
+set -euo pipefail
+export DOT_DIR="{{ .dot_dir }}"
+export CHEZMOI_PROFILE="{{ .profile }}"
+export CHEZMOI_NON_INTERACTIVE="{{ if .nonInteractive }}1{{ else }}0{{ end }}"
+export CHEZMOI_APPLYING=1
+export PATH="$DOT_DIR/custom_bins:$HOME/.local/bin:$PATH"
+
+cd "$DOT_DIR"
+echo "=== chezmoi → install.sh --profile={{ .profile }} --non-interactive ==="
+# CHEZMOI_APPLYING=1 skips the chezmoi-wrapper path inside install.sh
+"$DOT_DIR/install.sh" --profile="{{ .profile }}" --non-interactive
+{{ else -}}
+#!/usr/bin/env zsh
+# No install components enabled for profile {{ .profile }}
+true
+{{ end -}}

@@ -1,0 +1,148 @@
+#!/usr/bin/env zsh
+# chezmoi: run_onchange — scheduled automation + macOS/Linux-only deploy side effects
+{{ $cfg := index . .profile -}}
+set -euo pipefail
+export DOT_DIR="{{ .dot_dir }}"
+export CHEZMOI_PROFILE="{{ .profile }}"
+export CHEZMOI_NON_INTERACTIVE="{{ if .nonInteractive }}1{{ else }}0{{ end }}"
+export PATH="$DOT_DIR/custom_bins:$PATH"
+CHEZMOI_ROOT="{{ .chezmoi.workingTree }}"
+source "$CHEZMOI_ROOT/scripts/lib.sh"
+
+run_setup() {
+  local label="$1" script="$2"
+  if [[ -x "$script" || -f "$script" ]]; then
+    log "Setup: $label"
+    chmod +x "$script" 2>/dev/null || true
+    "$script" || warn "$label setup failed"
+  else
+    warn "Missing setup script: $script"
+  fi
+}
+
+CLEANUP="$DOT_DIR/scripts/cleanup"
+
+{{ if $cfg.deploy.cleanup }}
+if is_macos; then
+  run_setup "file cleanup" "$CLEANUP/install.sh"
+fi
+{{ end }}
+
+{{ if $cfg.deploy.claude_cleanup }}
+run_setup "claude cleanup" "$CLEANUP/setup_claude_cleanup.sh"
+{{ end }}
+
+{{ if $cfg.deploy.ai_update }}
+run_setup "ai update" "$CLEANUP/setup_ai_update.sh"
+{{ end }}
+
+{{ if $cfg.deploy.mcp_sync }}
+run_setup "mcp sync" "$CLEANUP/setup_mcp_sync.sh"
+{{ end }}
+
+{{ if $cfg.deploy.usage_ping }}
+run_setup "usage ping" "$CLEANUP/setup_usage_ping.sh"
+{{ end }}
+
+{{ if $cfg.deploy.tmux_resume }}
+run_setup "tmux resume" "$CLEANUP/setup_tmux_resume.sh"
+{{ end }}
+
+{{ if $cfg.deploy.brew_update }}
+run_setup "package auto-update" "$CLEANUP/setup_brew_update.sh"
+{{ end }}
+
+{{ if $cfg.deploy.dep_audit }}
+if [[ -f "$DOT_DIR/scripts/security/setup_dep_audit.sh" ]]; then
+  run_setup "dep audit" "$DOT_DIR/scripts/security/setup_dep_audit.sh"
+elif [[ -f "$CLEANUP/../security/setup_dependency_audit.sh" ]]; then
+  run_setup "dep audit" "$CLEANUP/../security/setup_dependency_audit.sh"
+fi
+{{ end }}
+
+{{ if and $cfg.deploy.keyboard (eq .chezmoi.os "darwin") }}
+run_setup "keyboard repeat" "$CLEANUP/setup_keyboard_repeat.sh"
+{{ end }}
+
+{{ if and $cfg.deploy.hide_idle_apps (eq .chezmoi.os "darwin") }}
+run_setup "hide idle apps" "$CLEANUP/setup_hide_idle_apps.sh"
+{{ end }}
+
+{{ if and $cfg.deploy.bedtime (eq .chezmoi.os "darwin") }}
+run_setup "bedtime" "$CLEANUP/setup_bedtime_enforce.sh"
+{{ end }}
+
+{{ if and $cfg.deploy.text_replacements (eq .chezmoi.os "darwin") }}
+run_setup "text replacements" "$CLEANUP/setup_text_replacements_sync.sh"
+{{ end }}
+
+{{ if and $cfg.deploy.alfred (eq .chezmoi.os "darwin") }}
+if command -v alfred-fix &>/dev/null; then
+  alfred-fix || warn "alfred-fix failed"
+else
+  warn "alfred-fix not on PATH"
+fi
+{{ end }}
+
+{{ if and $cfg.deploy.mouseless (eq .chezmoi.os "darwin") }}
+MOUSELESS_DIR="$HOME/Library/Containers/net.sonuscape.mouseless/Data/.mouseless/configs"
+MOUSELESS_DOTFILES="$DOT_DIR/config/mouseless/config.yaml"
+if [[ -f "$MOUSELESS_DOTFILES" && -d "$MOUSELESS_DIR" ]]; then
+  cp "$MOUSELESS_DOTFILES" "$MOUSELESS_DIR/config.yaml"
+  ok "Mouseless config copied (not symlinked)"
+elif [[ -f "$MOUSELESS_DOTFILES" ]]; then
+  warn "Mouseless container not found — open Mouseless.app once, then re-apply"
+fi
+{{ end }}
+
+{{ if and $cfg.deploy.file_apps (eq .chezmoi.os "darwin") }}
+# File associations — reuse deploy.sh path via a small inline call
+if [[ -f "$DOT_DIR/config/macos_default_apps.conf" ]]; then
+  log "File associations: run deploy fragment via zsh"
+  (
+    export DOT_DIR CHEZMOI_PROFILE CHEZMOI_NON_INTERACTIVE
+    CHEZMOI_ROOT="{{ .chezmoi.workingTree }}"
+    source "$CHEZMOI_ROOT/scripts/lib.sh"
+    # Source only the file-apps section by invoking deploy with --only if available
+    if grep -q 'DEPLOY_FILE_APPS' "$DOT_DIR/deploy.sh"; then
+      export CHEZMOI_APPLYING=1
+      "$DOT_DIR/deploy.sh" --profile="{{ .profile }}" --only file-apps --non-interactive 2>/dev/null || \
+        warn "file-apps deploy skipped (use ./deploy.sh --only file-apps)"
+    fi
+  )
+fi
+{{ end }}
+
+{{ if and $cfg.deploy.bearcli (eq .chezmoi.os "darwin") }}
+BEAR_APP="/Applications/Bear.app"
+BEAR_SRC="$BEAR_APP/Contents/MacOS/bearcli"
+BEAR_LINK="/usr/local/bin/bearcli"
+if [[ -x "$BEAR_SRC" ]]; then
+  if [[ -L "$BEAR_LINK" && "$(readlink "$BEAR_LINK")" == "$BEAR_SRC" ]]; then
+    ok "Bear CLI symlink already in place"
+  elif mkdir -p /usr/local/bin 2>/dev/null && [[ -w /usr/local/bin ]]; then
+    ln -sf "$BEAR_SRC" "$BEAR_LINK"
+    ok "Symlinked bearcli"
+  else
+    sudo mkdir -p /usr/local/bin
+    sudo ln -sf "$BEAR_SRC" "$BEAR_LINK"
+    ok "Symlinked bearcli (sudo)"
+  fi
+else
+  warn "Bear CLI not found — install Bear 2+ from App Store"
+fi
+{{ end }}
+
+{{ if and $cfg.deploy.pueue (eq .chezmoi.os "linux") }}
+export CHEZMOI_APPLYING=1
+"$DOT_DIR/deploy.sh" --profile="{{ .profile }}" --only pueue --non-interactive 2>/dev/null || \
+  warn "pueue deploy skipped"
+{{ end }}
+
+{{ if and $cfg.deploy.vpn (eq .chezmoi.os "darwin") }}
+export CHEZMOI_APPLYING=1
+"$DOT_DIR/deploy.sh" --profile="{{ .profile }}" --only vpn --non-interactive 2>/dev/null || \
+  warn "vpn deploy skipped"
+{{ end }}
+
+ok "Automation / platform hooks done"

@@ -1,0 +1,24 @@
+#!/usr/bin/env zsh
+# chezmoi: run_onchange — git config + gitattributes (wraps deploy_git_config)
+{{ $cfg := index . .profile -}}
+{{ if $cfg.deploy.git_config -}}
+set -euo pipefail
+export DOT_DIR="{{ .dot_dir }}"
+export CHEZMOI_PROFILE="{{ .profile }}"
+export CHEZMOI_NON_INTERACTIVE="{{ if .nonInteractive }}1{{ else }}0{{ end }}"
+CHEZMOI_ROOT="{{ .chezmoi.workingTree }}"
+source "$CHEZMOI_ROOT/scripts/lib.sh"
+
+log_section "DEPLOYING GIT CONFIGURATION (chezmoi)"
+# Non-interactive: deploy_git_config already keeps existing values on conflict when no TTY
+if [[ "$CHEZMOI_NON_INTERACTIVE" == "1" ]]; then
+  export GIT_CONFIG_NOSYSTEM=1
+fi
+deploy_git_config || warn "deploy_git_config failed"
+
+# core.attributesFile (symlink applied by chezmoi for ~/.gitattributes)
+if [[ -e "$HOME/.gitattributes" ]]; then
+  git config --global core.attributesFile "$HOME/.gitattributes"
+fi
+ok "git config deployed"
+{{ end -}}

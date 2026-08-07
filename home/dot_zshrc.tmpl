@@ -1,0 +1,7 @@
+{{/* Shell entrypoints: source live config from the repo (same as deploy.sh). */ -}}
+{{- $cfg := index . .profile -}}
+{{- if $cfg.deploy.shell -}}
+# Managed by chezmoi — sources live config from the dotfiles repo.
+export DOT_DIR="{{ .dot_dir }}"
+source "$DOT_DIR/config/zshrc.sh"
+{{- end }}

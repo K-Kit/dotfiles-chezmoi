@@ -1,0 +1,24 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# chezmoi local state (if source is also destination during dev)
+.chezmoi.toml.bak
+
+# Editor swap/backup files
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+
+# Claude Code runtime state for this working copy (not the chezmoi-managed ~/.claude target)
+.claude/
+
+# remember plugin memory buffer (already self-ignored via .remember/.gitignore; kept here as defense-in-depth)
+.remember/
+
+# Multi-agent coordination claim files (per-session, ephemeral)
+.agent-claims/

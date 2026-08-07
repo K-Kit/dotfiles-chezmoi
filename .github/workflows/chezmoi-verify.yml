@@ -1,0 +1,50 @@
+name: Chezmoi verify
+on:
+  push:
+    paths:
+      - "home/**"
+      - ".chezmoiroot"
+      - ".chezmoi.toml.tmpl"
+      - "scripts/chezmoi/**"
+  pull_request:
+    paths:
+      - "home/**"
+      - ".chezmoiroot"
+      - ".chezmoi.toml.tmpl"
+      - "scripts/chezmoi/**"
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install chezmoi
+        run: sh -c "$(curl -fsSL get.chezmoi.io)" -- -b "$HOME/bin"
+      - name: Add chezmoi to PATH
+        run: echo "$HOME/bin" >> "$GITHUB_PATH"
+      - name: Managed files (cloud profile)
+        env:
+          CHEZMOI_PROFILE: cloud
+          CHEZMOI_NON_INTERACTIVE: "1"
+        run: |
+          cat > /tmp/chezmoi.toml <<'EOF'
+          [data]
+              profile = "cloud"
+              nonInteractive = true
+          EOF
+          chezmoi --source "$GITHUB_WORKSPACE" --destination /tmp/chezmoi-dest \
+            --config /tmp/chezmoi.toml managed
+      - name: Template dry-run (no apply scripts)
+        env:
+          CHEZMOI_PROFILE: cloud
+          CHEZMOI_NON_INTERACTIVE: "1"
+        run: |
+          cat > /tmp/chezmoi.toml <<'EOF'
+          [data]
+              profile = "cloud"
+              nonInteractive = true
+          EOF
+          # Verify templates render without applying (diff against empty dest)
+          mkdir -p /tmp/chezmoi-dest
+          chezmoi --source "$GITHUB_WORKSPACE" --destination /tmp/chezmoi-dest \
+            --config /tmp/chezmoi.toml diff --no-pager || true

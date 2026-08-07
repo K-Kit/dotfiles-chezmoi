@@ -1,0 +1,32 @@
+#!/usr/bin/env zsh
+# chezmoi: run_onchange — install TPM + resurrect/continuum (mirrors deploy.sh tmux block)
+{{ $cfg := index . .profile -}}
+{{ if $cfg.deploy.tmux -}}
+set -euo pipefail
+export DOT_DIR="{{ .dot_dir }}"
+export CHEZMOI_PROFILE="{{ .profile }}"
+CHEZMOI_ROOT="{{ .chezmoi.workingTree }}"
+source "$CHEZMOI_ROOT/scripts/lib.sh"
+
+log "Installing tmux plugins (TPM)..."
+if typeset -f install_tpm >/dev/null 2>&1; then
+  install_tpm || warn "TPM install failed"
+else
+  # Fallback if helper unavailable
+  tpm="$HOME/.tmux/plugins/tpm"
+  if [[ ! -d "$tpm" ]]; then
+    git clone --quiet https://github.com/tmux-plugins/tpm "$tpm" 2>/dev/null || warn "TPM clone failed"
+  fi
+fi
+
+plugin_dir="$HOME/.tmux/plugins"
+mkdir -p "$plugin_dir"
+for plugin in tmux-resurrect tmux-continuum; do
+  if [[ ! -d "$plugin_dir/$plugin" ]]; then
+    log "Installing $plugin..."
+    git clone --quiet "https://github.com/tmux-plugins/$plugin" "$plugin_dir/$plugin" 2>/dev/null || \
+      warn "$plugin clone failed"
+  fi
+done
+ok "tmux plugins ready"
+{{ end -}}

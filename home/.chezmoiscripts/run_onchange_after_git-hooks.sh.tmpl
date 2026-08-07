@@ -1,0 +1,31 @@
+#!/usr/bin/env zsh
+# chezmoi: run_onchange — git hooks
+{{ $cfg := index . .profile -}}
+{{ if $cfg.deploy.git_hooks -}}
+set -euo pipefail
+export DOT_DIR="{{ .dot_dir }}"
+export CHEZMOI_PROFILE="{{ .profile }}"
+CHEZMOI_ROOT="{{ .chezmoi.workingTree }}"
+source "$CHEZMOI_ROOT/scripts/lib.sh"
+
+log "Deploying global git hooks..."
+if [[ -d "$DOT_DIR/config/git-hooks" ]]; then
+  mkdir -p "$HOME/.git-hooks"
+  for hook in "$DOT_DIR/config/git-hooks"/*; do
+    if [[ -f "$hook" ]]; then
+      ln -sf "$hook" "$HOME/.git-hooks/$(basename "$hook")"
+      chmod +x "$hook"
+    fi
+  done
+  git config --global core.hooksPath "$HOME/.git-hooks"
+  ok "Deployed global git hooks to ~/.git-hooks"
+else
+  warn "Git hooks directory not found"
+fi
+
+if [[ -d "$DOT_DIR/.git" ]] && [[ -f "$DOT_DIR/scripts/hooks/dotfiles-pre-commit.sh" ]]; then
+  chmod +x "$DOT_DIR/scripts/hooks/dotfiles-pre-commit.sh"
+  ln -sf "../../scripts/hooks/dotfiles-pre-commit.sh" "$DOT_DIR/.git/hooks/pre-commit.local"
+  ok "Deployed dotfiles pre-commit hook"
+fi
+{{ end -}}

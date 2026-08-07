@@ -1,0 +1,87 @@
+#!/usr/bin/env zsh
+# chezmoi: run_onchange — Claude + Codex smart merge (from deploy.sh)
+# Owns ~/.claude and ~/.codex symlinks; not managed as chezmoi symlink_ targets
+# so runtime files (history, cache, sqlite) are never destroyed by apply.
+{{ $cfg := index . .profile -}}
+{{ if or $cfg.deploy.claude $cfg.deploy.codex -}}
+set -euo pipefail
+export DOT_DIR="{{ .dot_dir }}"
+export CHEZMOI_PROFILE="{{ .profile }}"
+export PATH="$DOT_DIR/custom_bins:$PATH"
+CHEZMOI_ROOT="{{ .chezmoi.workingTree }}"
+source "$CHEZMOI_ROOT/scripts/lib.sh"
+
+smart_merge_symlink() {
+  # $1 = source dir in repo, $2 = target in $HOME (e.g. .claude), $3 = name for logs
+  local src="$1" dest_name="$2" label="$3"
+  local dest="$HOME/$dest_name"
+  local -a runtime_files
+  runtime_files=("${(@)argv[4,-1]}")
+
+  if [[ ! -d "$src" ]]; then
+    warn "$label directory not found at $src"
+    return 1
+  fi
+
+  if [[ -L "$dest" ]]; then
+    rm "$dest"
+    log "Refreshed existing $dest symlink"
+  elif [[ -d "$dest" ]]; then
+    log "Smart merge: preserving runtime files from existing $dest"
+    local backup_path="$dest.backup.$(date -u +%Y-%m-%d_%H-%M-%S)"
+    mv "$dest" "$backup_path"
+    ln -sf "$src" "$dest"
+    local restored=0
+    local file
+    for file in "${runtime_files[@]}"; do
+      if [[ -e "$backup_path/$file" ]]; then
+        # Ensure parent exists for nested paths like plugins/foo
+        mkdir -p "$dest/$(dirname "$file")" 2>/dev/null || true
+        cp -R "$backup_path/$file" "$dest/$file" 2>/dev/null && ((restored++)) || true
+      fi
+    done
+    if (( restored > 0 )); then
+      ok "Restored $restored runtime path(s) for $label"
+      log "Backup at: $backup_path"
+    fi
+  fi
+
+  if [[ ! -e "$dest" ]]; then
+    ln -sf "$src" "$dest"
+  fi
+  ok "$label → $dest"
+}
+
+{{ if $cfg.deploy.claude }}
+log_section "DEPLOYING CLAUDE CODE (chezmoi)"
+smart_merge_symlink "$DOT_DIR/claude" ".claude" "Claude" \
+  ".credentials.json" "history.jsonl" "cache" "projects" \
+  "plans" "todos" "session-env" "shell-snapshots" "statsig" \
+  ".cl" "debug" "mcp_servers.json" \
+  "plugins/installed_plugins.json" "plugins/known_marketplaces.json"
+
+if command -v claude-tools &>/dev/null; then
+  log "Syncing plugin marketplaces..."
+  claude-tools context --sync -v || warn "Marketplace sync had issues — run: claude-tools context --sync"
+else
+  warn "claude-tools not found — skipping marketplace sync"
+fi
+
+if [[ -f "$DOT_DIR/scripts/cleanup/clean_plugin_symlinks.sh" ]]; then
+  "$DOT_DIR/scripts/cleanup/clean_plugin_symlinks.sh" || true
+fi
+if command -v claude-cache-clean &>/dev/null; then
+  claude-cache-clean --apply || true
+fi
+{{ end }}
+
+{{ if $cfg.deploy.codex }}
+log_section "DEPLOYING CODEX CLI (chezmoi)"
+# Runtime files from codex/.gitignore patterns
+smart_merge_symlink "$DOT_DIR/codex" ".codex" "Codex" \
+  "auth.json" "history.jsonl" "session_index.jsonl" \
+  "cache" "sessions" "memories" "tmp" "vendor_imports" \
+  "logs_2.sqlite" "logs_2.sqlite-shm" "logs_2.sqlite-wal" \
+  "state_5.sqlite" "state_5.sqlite-shm" "state_5.sqlite-wal"
+{{ end }}
+{{ end -}}
