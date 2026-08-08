@@ -7,6 +7,11 @@ secrets-paths() {
     "$DOT_DIR/custom_bins/dotfiles-secrets" paths
 }
 
+# Backward-compatible entry point for the secrets CLI.
+secrets-cli() {
+    dotfiles-secrets "$@"
+}
+
 secrets-fix-perms() {
     dotfiles_secrets_harden_permissions
     project_secret_harden_permissions "$PWD"

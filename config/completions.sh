@@ -1,4 +1,14 @@
+#!/usr/bin/env zsh
 # ZSH completion functions
+#
+# Sourced by config/zshrc.sh. Also on PATH via custom_bins/completions.sh, so
+# running it directly is a natural mistake — compdef only affects the shell it
+# runs in, so a subprocess can't install anything. Guard against that.
+if [[ "${ZSH_EVAL_CONTEXT:-toplevel}" != *:file* ]]; then
+    print -u2 "completions.sh must be sourced, not executed (compdef only affects the current shell)."
+    print -u2 "Run:  source ${0:A}"
+    exit 1
+fi
 
 # Python module completion for `python -m <module>`
 # Finds modules by looking for __main__.py files and standalone .py files

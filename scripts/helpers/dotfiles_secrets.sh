@@ -136,6 +136,9 @@ telegram_state_harden_permissions() {
 
 project_secret_harden_permissions() {
     local project_root="${1:-.}"
+    # Never recursively scan broad roots; this helper is for project directories.
+    project_root="$(cd "$project_root" 2>/dev/null && pwd -P)" || return 1
+    [[ "$project_root" != "/" && "$project_root" != "$HOME" ]] || return 0
     local envrc="$project_root/.envrc"
     local env_file
 
@@ -158,7 +161,7 @@ project_secret_harden_permissions() {
                 -path "$project_root/claude/plugins/plugins.bak" -o \
                 -path "$project_root/codex/.tmp" \
             \) -prune -o \
-            -type f -name '.env' -print
+            -type f -name '.env' -print 2>/dev/null
     )
 
     if [[ -d "$project_root/.claude/channels/telegram" ]]; then
