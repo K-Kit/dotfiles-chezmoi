@@ -3,8 +3,9 @@ model_reasoning_effort = "high"
 approval_policy = "on-request"
 approvals_reviewer = "auto_review"
 sandbox_mode = "workspace-write"
-notify = ["/bin/sh", "-c", "CLIENT=\"$HOME/.codex/computer-use/Codex Computer Use.app/Contents/SharedSupport/SkyComputerUseClient.app/Contents/MacOS/SkyComputerUseClient\"; [ -x \"$CLIENT\" ] && exec \"$CLIENT\" turn-ended \"$1\"; exit 0", "codex-notify"]
 service_tier = "priority"
+
+notify = ["/Users/kit/dotfiles-chezmoi/codex/computer-use/Codex Computer Use.app/Contents/SharedSupport/SkyComputerUseClient.app/Contents/MacOS/SkyComputerUseClient", "turn-ended", "--previous-notify", "[\"\\/bin\\/sh\",\"-c\",\"CLIENT=\\\"$HOME\\/.codex\\/computer-use\\/Codex Computer Use.app\\/Contents\\/SharedSupport\\/SkyComputerUseClient.app\\/Contents\\/MacOS\\/SkyComputerUseClient\\\"; [ -x \\\"$CLIENT\\\" ] && exec \\\"$CLIENT\\\" turn-ended \\\"$1\\\"; exit 0\",\"codex-notify\"]"]
 
 [mcp_servers.linear]
 url = "https://mcp.linear.app/mcp"
@@ -20,22 +21,25 @@ command = "npx"
 args = ["@playwright/mcp@latest"]
 
 [mcp_servers.node_repl]
-command = "/Applications/Codex.app/Contents/Resources/cua_node/bin/node_repl"
-startup_timeout_sec = 120.0
+args = []
+command = "/Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node_repl"
+startup_timeout_sec = 120
 
 [mcp_servers.node_repl.env]
+NODE_REPL_NATIVE_PIPE_CONNECT_TIMEOUT_MS = "1000"
+NODE_REPL_NODE_MODULE_DIRS = "/Applications/ChatGPT.app/Contents/Resources/cua_node/lib/node_modules"
+NODE_REPL_NODE_PATH = "/Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node"
+NODE_REPL_TRUSTED_CODE_PATHS = "/Users/kit/.codex:/Applications/ChatGPT.app/Contents/Resources/cua_node/lib/node_modules"
+CODEX_HOME = "/Users/kit/.codex"
+NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S = "323bc3e687e17d7e377238d9f4c69111c4d0e6219103b6316d8c52082489533b"  # gitleaks:allow (sha256 trust pin, not a secret)
 BROWSER_USE_AVAILABLE_BACKENDS = "chrome,iab"
-BROWSER_USE_CODEX_APP_BUILD_FLAVOR = "prod"
-BROWSER_USE_CODEX_APP_VERSION = "26.609.41114"
-CODEX_CLI_PATH = "/Applications/Codex.app/Contents/Resources/codex"
-CODEX_HOME = "/Users/yulong/.codex"
 NODE_REPL_INSTRUCTIONS_USE_CASE_BROWSER = "Control the in-app browser in conjunction with the Browser Plugin."
 NODE_REPL_INSTRUCTIONS_USE_CASE_CHROME = "Control the Chrome browser in conjunction with the Chrome Plugin. Prefer this method of controlling Chrome over alternatives (such as Computer Use) unless the user explicitly mentions an alternative."
-NODE_REPL_NATIVE_PIPE_CONNECT_TIMEOUT_MS = "1000"
-NODE_REPL_NODE_MODULE_DIRS = "/Applications/Codex.app/Contents/Resources/cua_node/lib/node_modules"
-NODE_REPL_NODE_PATH = "/Applications/Codex.app/Contents/Resources/cua_node/bin/node"
-NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S = "27dca86fd6b571c49414a4b78e46b57bcf683a46cd1319799c11fbb6cfae3110"  # gitleaks:allow (sha256 trust pin, not a secret)
-NODE_REPL_TRUSTED_CODE_PATHS = "/Users/yulong/.codex"
+NODE_REPL_INSTRUCTIONS_USE_CASE_COMPUTER_USE = "Control desktop apps on macOS through Computer Use."
+BROWSER_USE_CODEX_APP_BUILD_FLAVOR = "prod"
+BROWSER_USE_CODEX_APP_VERSION = "26.803.41515"
+SKY_CUA_SERVICE_PATH = "/Users/kit/.codex/computer-use/Codex Computer Use.app"
+CODEX_CLI_PATH = "/Applications/ChatGPT.app/Contents/Resources/codex"
 
 
 [mcp_servers.openaiDeveloperDocs]
@@ -122,6 +126,9 @@ trust_level = "trusted"
 [projects."/Users/kit/Documents/Codex/2026-08-07/https-community-hetzner-com-tutorials-install"]
 trust_level = "trusted"
 
+[projects."/Users/kit"]
+trust_level = "trusted"
+
 [notice.model_migrations]
 "gpt-5.3-codex" = "gpt-5.4"
 
@@ -194,14 +201,20 @@ enabled = true
 [plugins."visualize@openai-bundled"]
 enabled = true
 
+[plugins."chrome@openai-bundled"]
+enabled = true
+
+[plugins."computer-use@openai-bundled"]
+enabled = true
+
 [tui.model_availability_nux]
 "gpt-5.5" = 4
 "gpt-5.6-sol" = 2
 
 [marketplaces.openai-bundled]
-last_updated = "2026-07-27T05:32:50Z"
+last_updated = "2026-08-07T21:57:45Z"
 source_type = "local"
-source = "/home/kit/dotfiles/codex/.tmp/bundled-marketplaces/openai-bundled"
+source = "/Users/kit/dotfiles-chezmoi/codex/.tmp/bundled-marketplaces/openai-bundled"
 
 [marketplaces.openai-primary-runtime]
 last_updated = "2026-06-06T10:48:42Z"
@@ -209,8 +222,8 @@ source_type = "local"
 source = "/Users/yulong/.cache/codex-runtimes/codex-primary-runtime/plugins/openai-primary-runtime"
 
 [marketplaces.claude-plugins-official]
-last_updated = "2026-08-07T14:06:15Z"
-last_revision = "157f15ec736cd2ea3bb47b94d412697e2fed6e19"
+last_updated = "2026-08-07T21:57:46Z"
+last_revision = "d33732b67aef18b3409d2c566e1d15541906726d"
 source_type = "git"
 source = "https://github.com/anthropics/claude-plugins-official.git"
 
@@ -265,6 +278,11 @@ trusted_hash = "sha256:687e7af87f0cb59b1bcc71d368e097304b45d84999c90dc97358a2281
 generate_memories = true
 use_memories = true
 
+[shell_environment_policy.set]
+BROWSER_USE_AVAILABLE_BACKENDS = "chrome,iab"
+NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S = "323bc3e687e17d7e377238d9f4c69111c4d0e6219103b6316d8c52082489533b"
+NODE_REPL_TRUSTED_CODE_PATHS = "/Users/kit/.codex:/Applications/ChatGPT.app/Contents/Resources/cua_node/lib/node_modules"
+
 # BEGIN SHARED MCP SERVERS
 # Auto-generated by scripts/helpers/sync_mcp_servers.py
 [mcp_servers.agentation]
@@ -288,4 +306,10 @@ ZOTERO_API_KEY = "${ZOTERO_API_KEY}"
 ZOTERO_LIBRARY_ID = "${ZOTERO_LIBRARY_ID}"
 ZOTERO_LIBRARY_TYPE = "${ZOTERO_LIBRARY_TYPE:-user}"
 ZOTERO_LOCAL = "true"
+
+[mcp_servers.computer-use]
+command = "./Codex Computer Use.app/Contents/SharedSupport/SkyComputerUseClient.app/Contents/MacOS/SkyComputerUseClient"
+args = ["mcp"]
+cwd = "."
+enabled = false
 # END SHARED MCP SERVERS
